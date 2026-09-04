@@ -25,6 +25,23 @@ class ClipEvidence(BaseModel):
     reasons: list[str] = Field(default_factory=list)
 
 
+class SegmentEvidence(BaseModel):
+    clip_path: str
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    duration_seconds: float = Field(gt=0)
+    score: float = Field(ge=0, le=1)
+    evidence: list[str] = Field(default_factory=list)
+
+    @field_validator("end_seconds")
+    @classmethod
+    def end_after_start(cls, value: float, info):
+        start = info.data.get("start_seconds")
+        if start is not None and value <= start:
+            raise ValueError("end_seconds must be greater than start_seconds")
+        return value
+
+
 class TimelineItem(BaseModel):
     clip_path: str
     start_seconds: float = Field(ge=0)
