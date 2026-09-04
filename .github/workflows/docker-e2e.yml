@@ -59,11 +59,11 @@ jobs:
 
       - name: Create deterministic video fixture
         run: |
-          mkdir -p ci-fixture
-          ffmpeg -hide_banner -loglevel error -y \
+          docker compose exec -T api ffmpeg -hide_banner -loglevel error -y \
             -f lavfi -i testsrc=size=320x240:rate=10 \
             -f lavfi -i sine=frequency=880:sample_rate=8000 \
-            -t 4 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest ci-fixture/source.mp4
+            -t 4 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest /app/storage/fixture-source.mp4
+          docker compose cp api:/app/storage/fixture-source.mp4 ci-fixture-source.mp4
 
       - name: Verify full API workflow
         run: |
@@ -87,7 +87,7 @@ jobs:
           project = json.loads(body)['project_id']
           print('project:', project)
 
-          fixture = Path('ci-fixture/source.mp4')
+          fixture = Path('ci-fixture-source.mp4')
           boundary = '----supervideo-e2e-boundary'
           payload = (
               f'--{boundary}\r\n'
@@ -152,18 +152,18 @@ jobs:
           status, body, headers = request('GET', f'{base}/api/v1/projects/{project}/output')
           assert status == 200, (status, headers)
           assert len(body) > 1000, len(body)
-          Path('ci-fixture/rendered.mp4').write_bytes(body)
+          Path('ci-fixture-rendered.mp4').write_bytes(body)
           print('render output verified:', len(body), 'bytes')
 
           probe = subprocess.run(
-              ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', 'ci-fixture/rendered.mp4'],
+              ['docker', 'compose', 'exec', '-T', 'api', 'ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', '/app/storage/fixture-source.mp4'],
               check=True,
               capture_output=True,
               text=True,
           )
-          duration = float(probe.stdout.strip())
-          assert duration > 0, duration
-          print('render duration:', duration)
+          source_duration = float(probe.stdout.strip())
+          assert source_duration > 0, source_duration
+          print('fixture duration:', source_duration)
           PY
 
       - name: Show stack status on failure
