@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SuperVideoEditorAI</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header><div><p class="eyebrow">AI DIRECTOR</p><h1>SuperVideoEditorAI</h1><p class="muted">Turn raw footage into a first visual story.</p></div><span id="health" class="badge">checking API…</span></header>
+    <section class="card">
+      <h2>1. Create project</h2><button id="create">Create Project</button><code id="project">No project</code>
+    </section>
+    <section class="card">
+      <h2>2. Upload footage</h2><input id="files" type="file" accept="video/*" multiple><button id="upload" disabled>Upload Selected Clips</button><div id="uploads" class="list"></div>
+    </section>
+    <section class="card">
+      <h2>3. Analyze & build story</h2><button id="analyze" disabled>Analyze Footage</button><div id="job" class="status">Waiting for project.</div><pre id="result"></pre>
+    </section>
+    <section class="card">
+      <h2>4. Render</h2><button id="render" disabled>Render MP4</button><a id="download" class="download" hidden>Open rendered video</a>
+    </section>
+    <section class="card">
+      <h2>5. AI Director</h2><textarea id="instruction" rows="3" placeholder="Example: Make the opening stronger and keep the ending calm."></textarea><button id="direct" disabled>Send Direction</button><pre id="direction"></pre>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
