@@ -1,6 +1,5 @@
-const API = window.SUPERVIDEO_API || "http://localhost:8000";
+const API = window.SUPERVIDEO_API || "";
 let projectId = null;
-
 const $ = (id) => document.getElementById(id);
 async function request(path, options = {}) {
   const response = await fetch(`${API}${path}`, options);
