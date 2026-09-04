@@ -2,7 +2,8 @@
   "name": "SuperVideoEditorAI",
   "dockerComposeFile": "../docker-compose.yml",
   "service": "api",
-  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/app,type=bind",
+  "workspaceFolder": "/app",
   "shutdownAction": "stopCompose",
   "forwardPorts": [3000, 8000],
   "portsAttributes": {
@@ -15,5 +16,5 @@
       "onAutoForward": "notify"
     }
   },
-  "postCreateCommand": "test -f .env || cp .env.example .env"
+  "postCreateCommand": "cp -n .env.example .env 2>/dev/null || true"
 }
