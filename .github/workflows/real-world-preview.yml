@@ -57,6 +57,7 @@ jobs:
           for attempt in $(seq 1 30); do
             URL=$(grep -oE 'https://[-a-z0-9]+\.trycloudflare\.com' tunnel.log | head -n 1 || true)
             if [ -n "$URL" ]; then
+              export PUBLIC_PREVIEW_URL="$URL"
               echo "PUBLIC_PREVIEW_URL=$URL" >> "$GITHUB_ENV"
               echo "::notice title=SuperVideoEditorAI real-world preview::$URL"
               echo "## SuperVideoEditorAI real-world preview" >> "$GITHUB_STEP_SUMMARY"
