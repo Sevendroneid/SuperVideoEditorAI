@@ -15,7 +15,7 @@ from .models import JobRecord, SegmentEvidence, Timeline
 from .worker import analyze_project, render_project
 
 settings = get_settings()
-app = FastAPI(title=settings.app_name, version="0.2.0")
+app = FastAPI(title=settings.app_name, version="0.2.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -34,8 +34,9 @@ def project_path(project_id: str) -> Path:
         c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in project_id
     ):
         raise HTTPException(status_code=400, detail="Invalid project id")
-    path = settings.projects_dir / project_id
-    if not path.is_dir():
+    path = (settings.projects_dir / project_id).resolve()
+    projects_root = settings.projects_dir.resolve()
+    if path.parent != projects_root or not path.is_dir():
         raise HTTPException(status_code=404, detail="Project not found")
     return path
 
@@ -118,7 +119,7 @@ def queue_analysis(project_id: str) -> JobRecord:
 
 @app.get(f"{settings.api_prefix}/jobs/{{job_id}}")
 def get_job(job_id: str):
-    if not job_id or len(job_id) > 64:
+    if not job_id or len(job_id) > 64 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for c in job_id):
         raise HTTPException(status_code=400, detail="Invalid job id")
     for project in settings.projects_dir.iterdir():
         if project.is_dir():
@@ -145,8 +146,10 @@ def queue_render(project_id: str) -> JobRecord:
 
 @app.get(f"{settings.api_prefix}/projects/{{project_id}}/output")
 def download_output(project_id: str):
-    path = settings.outputs_dir / f"{project_id}.mp4"
-    if not path.is_file():
+    project_path(project_id)
+    path = (settings.outputs_dir / f"{project_id}.mp4").resolve()
+    outputs_root = settings.outputs_dir.resolve()
+    if path.parent != outputs_root or not path.is_file():
         raise HTTPException(status_code=404, detail="Rendered output not found")
     return FileResponse(path, media_type="video/mp4", filename="supervideo-story.mp4")
 
