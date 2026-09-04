@@ -1,28 +1,30 @@
-from .models import ClipEvidence, Timeline, TimelineItem
+from .models import SegmentEvidence, Timeline, TimelineItem
 
 
-def build_baseline_story(clips: list[ClipEvidence], max_duration: float = 60.0) -> Timeline:
-    """Build a deterministic first-cut story from verified clip evidence.
-
-    This is intentionally not presented as cinematic intelligence. It is the
-    reproducible baseline against which later AI Director decisions can be tested.
-    """
+def build_baseline_story(segments: list[SegmentEvidence], max_duration: float = 60.0) -> Timeline:
+    """Build a reproducible first cut from verified segment evidence."""
+    candidates = sorted(segments, key=lambda item: item.score, reverse=True)
     selected: list[TimelineItem] = []
     elapsed = 0.0
     roles = ["establish", "action", "detail", "reveal", "resolution"]
-    for index, clip in enumerate(clips):
-        remaining = max_duration - elapsed
-        if remaining <= 0:
+    used_ranges: set[tuple[str, float, float]] = set()
+
+    for segment in candidates:
+        if elapsed >= max_duration:
             break
-        duration = min(clip.duration_seconds, remaining)
+        key = (segment.clip_path, segment.start_seconds, segment.end_seconds)
+        if key in used_ranges:
+            continue
+        duration = min(segment.duration_seconds, max_duration - elapsed)
         if duration <= 0:
             continue
         selected.append(TimelineItem(
-            clip_path=clip.path,
-            start_seconds=0.0,
-            end_seconds=duration,
-            role=roles[index] if index < len(roles) else "unknown",
+            clip_path=segment.clip_path,
+            start_seconds=segment.start_seconds,
+            end_seconds=round(segment.start_seconds + duration, 3),
+            role=roles[len(selected)] if len(selected) < len(roles) else "unknown",
         ))
+        used_ranges.add(key)
         elapsed += duration
 
     return Timeline(items=selected, total_duration_seconds=round(elapsed, 3))
