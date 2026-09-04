@@ -1,0 +1,195 @@
+name: real-world-preview-v2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: "How long to keep the public test URL alive"
+        required: true
+        default: "15"
+        type: choice
+        options: ["15", "30", "60"]
+
+jobs:
+  preview:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[preview-ci-v2]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare environment
+        run: cp .env.example .env
+
+      - name: Build and start application stack
+        run: docker compose up -d --build
+
+      - name: Wait for web
+        run: |
+          python - <<'PY'
+          import time, urllib.request
+          for _ in range(60):
+              try:
+                  with urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=2) as r:
+                      if r.status == 200:
+                          print(r.read().decode())
+                          break
+              except Exception as exc:
+                  print(exc)
+              time.sleep(2)
+          else:
+              raise SystemExit('web health check failed')
+          PY
+
+      - name: Install cloudflared
+        run: |
+          sudo curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared
+          sudo chmod +x /usr/local/bin/cloudflared
+          cloudflared --version
+
+      - name: Public preview and full E2E
+        env:
+          PREVIEW_DURATION_MINUTES: ${{ inputs.duration_minutes || '15' }}
+        run: |
+          set -euo pipefail
+          rm -f tunnel.log LIVE_PREVIEW_URL.txt LIVE_PREVIEW.md
+          cloudflared tunnel --no-autoupdate --url http://127.0.0.1:3000 > tunnel.log 2>&1 &
+          TUNNEL_PID=$!
+          cleanup() {
+            kill "$TUNNEL_PID" 2>/dev/null || true
+            wait "$TUNNEL_PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          URL=""
+          for attempt in $(seq 1 30); do
+            URL=$(grep -oE 'https://[-a-z0-9]+\.trycloudflare\.com' tunnel.log | head -n 1 || true)
+            if [ -n "$URL" ]; then break; fi
+            if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+              cat tunnel.log
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ -z "$URL" ]; then
+            cat tunnel.log
+            exit 1
+          fi
+
+          printf '%s\n' "$URL" | tee LIVE_PREVIEW_URL.txt
+          {
+            echo "## SuperVideoEditorAI LIVE PREVIEW"
+            echo
+            echo "**URL:** $URL"
+            echo
+            echo "Temporary anonymous TryCloudflare URL. It remains valid while this workflow job is running."
+          } > LIVE_PREVIEW.md
+          echo "::notice title=SuperVideoEditorAI LIVE PREVIEW::$URL"
+          echo "## SuperVideoEditorAI LIVE PREVIEW" >> "$GITHUB_STEP_SUMMARY"
+          echo "**$URL**" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "The URL is live until this job ends." >> "$GITHUB_STEP_SUMMARY"
+
+          python - "$URL" <<'PY'
+          import json, sys, time, urllib.request
+          from pathlib import Path
+          base = sys.argv[1].rstrip('/')
+
+          def req(method, path, data=None, headers=None, timeout=60):
+              r = urllib.request.Request(base + path, data=data, headers=headers or {}, method=method)
+              with urllib.request.urlopen(r, timeout=timeout) as x:
+                  return x.status, x.read(), x.headers
+
+          for path in ('/', '/health'):
+              for _ in range(15):
+                  try:
+                      status, body, _ = req('GET', path, timeout=10)
+                      if status == 200:
+                          print('PUBLIC', path, status, body.decode(errors='replace'))
+                          break
+                  except Exception as exc:
+                      print('retry', path, exc)
+                  time.sleep(2)
+              else:
+                  raise SystemExit(f'public endpoint failed: {path}')
+
+          status, body, _ = req('GET', '/health')
+          health = json.loads(body)
+          assert health.get('status') == 'ok', health
+
+          status, body, _ = req('POST', '/api/v1/projects')
+          assert status == 200, (status, body)
+          project = json.loads(body)['project_id']
+          print('project', project)
+
+          fixture = Path('/tmp/public-e2e-source.mp4')
+          import subprocess
+          subprocess.run([
+              'docker','compose','exec','-T','api','ffmpeg','-hide_banner','-loglevel','error','-y',
+              '-f','lavfi','-i','testsrc=size=320x240:rate=10',
+              '-f','lavfi','-i','sine=frequency=880:sample_rate=8000',
+              '-t','4','-c:v','libx264','-pix_fmt','yuv420p','-c:a','aac','-shortest',
+              '/app/storage/public-e2e-source.mp4'], check=True)
+          subprocess.run(['docker','compose','cp','api:/app/storage/public-e2e-source.mp4',str(fixture)], check=True)
+
+          boundary = '----supervideo-public-e2e'
+          payload = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="source.mp4"\r\nContent-Type: video/mp4\r\n\r\n').encode() + fixture.read_bytes() + f'\r\n--{boundary}--\r\n'.encode()
+          status, body, _ = req('POST', f'/api/v1/projects/{project}/clips', payload, {'Content-Type': f'multipart/form-data; boundary={boundary}'})
+          assert status == 200, (status, body)
+
+          status, body, _ = req('POST', f'/api/v1/projects/{project}/analyze')
+          assert status == 202, (status, body)
+          analysis_job = json.loads(body)['id']
+
+          def wait_job(job):
+              for _ in range(90):
+                  status, body, _ = req('GET', f'/api/v1/jobs/{job}')
+                  assert status == 200, (status, body)
+                  data = json.loads(body)
+                  print('job', data.get('status'), data.get('progress'))
+                  if data.get('status') == 'completed': return
+                  if data.get('status') == 'failed': raise SystemExit(json.dumps(data))
+                  time.sleep(2)
+              raise SystemExit('job timeout')
+
+          wait_job(analysis_job)
+          status, body, _ = req('GET', f'/api/v1/projects/{project}/analysis')
+          assert status == 200, (status, body)
+          analysis = json.loads(body)
+          assert analysis.get('clips') and analysis.get('segments') and analysis.get('timeline', {}).get('items'), analysis
+
+          status, body, _ = req('POST', f'/api/v1/projects/{project}/director', json.dumps({'instruction':'make the opening stronger'}).encode(), {'Content-Type':'application/json'})
+          assert status == 200, (status, body)
+          director = json.loads(body)
+          assert director.get('applied') is True and director.get('evidence_bound') is True, director
+
+          status, body, _ = req('POST', f'/api/v1/projects/{project}/render')
+          assert status == 202, (status, body)
+          render_job = json.loads(body)['id']
+          wait_job(render_job)
+
+          status, body, headers = req('GET', f'/api/v1/projects/{project}/output', timeout=60)
+          assert status == 200 and len(body) > 1000, (status, len(body))
+          assert headers.get_content_type() == 'video/mp4', headers.get_content_type()
+          print('PUBLIC FULL VIDEO E2E: PASS', len(body), 'bytes')
+          PY
+
+          echo "Keeping preview alive for ${PREVIEW_DURATION_MINUTES} minutes: $URL"
+          sleep "$((PREVIEW_DURATION_MINUTES * 60))"
+
+      - name: Publish preview URL artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supervideo-live-preview-v2
+          path: |
+            LIVE_PREVIEW_URL.txt
+            LIVE_PREVIEW.md
+          if-no-files-found: ignore
+          retention-days: 1
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
