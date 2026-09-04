@@ -1,0 +1,19 @@
+{
+  "name": "SuperVideoEditorAI",
+  "dockerComposeFile": "../docker-compose.yml",
+  "service": "api",
+  "workspaceFolder": "/workspace",
+  "shutdownAction": "stopCompose",
+  "forwardPorts": [3000, 8000],
+  "portsAttributes": {
+    "3000": {
+      "label": "SuperVideoEditorAI Web",
+      "onAutoForward": "openBrowser"
+    },
+    "8000": {
+      "label": "SuperVideoEditorAI API",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "test -f .env || cp .env.example .env"
+}
