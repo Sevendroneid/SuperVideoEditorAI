@@ -21,4 +21,6 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q app tests
       - name: Run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: pytest -q
