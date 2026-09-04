@@ -1,3 +1,4 @@
+import json
 import uuid
 from pathlib import Path
 
@@ -45,10 +46,10 @@ async def upload_clip(project_id: str, file: UploadFile = File(...)) -> dict:
     allowed = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v"}
     filename = Path(file.filename or "").name
     suffix = Path(filename).suffix.lower()
-    if suffix not in allowed:
-        raise HTTPException(status_code=415, detail="Unsupported video extension")
     if not filename:
         raise HTTPException(status_code=400, detail="Filename is required")
+    if suffix not in allowed:
+        raise HTTPException(status_code=415, detail="Unsupported video extension")
     destination = path / f"{uuid.uuid4().hex}{suffix}"
     total = 0
     try:
@@ -70,8 +71,7 @@ async def upload_clip(project_id: str, file: UploadFile = File(...)) -> dict:
 def queue_analysis(project_id: str) -> JobRecord:
     path = project_path(project_id)
     job_id = uuid.uuid4().hex
-    store = JobStore(path / "jobs")
-    record = store.create(job_id)
+    record = JobStore(path / "jobs").create(job_id)
     analyze_project.delay(job_id, project_id)
     return record
 
@@ -89,8 +89,7 @@ def get_job(job_id: str):
 @app.post(f"{settings.api_prefix}/projects/{{project_id}}/render", status_code=202)
 def queue_render(project_id: str) -> JobRecord:
     path = project_path(project_id)
-    analysis_file = path / "analysis.json"
-    if not analysis_file.exists():
+    if not (path / "analysis.json").exists():
         raise HTTPException(status_code=409, detail="Analyze the project before rendering")
     job_id = uuid.uuid4().hex
     record = JobStore(path / "jobs").create(job_id)
@@ -100,7 +99,7 @@ def queue_render(project_id: str) -> JobRecord:
 
 @app.get(f"{settings.api_prefix}/projects/{{project_id}}/output")
 def download_output(project_id: str):
-    path = project_path(project_id) / "output.mp4"
+    path = settings.outputs_dir / f"{project_id}.mp4"
     if not path.exists():
         raise HTTPException(status_code=404, detail="Rendered output not found")
     return FileResponse(path, media_type="video/mp4", filename="supervideo-story.mp4")
@@ -112,7 +111,6 @@ async def director(project_id: str, instruction: str):
     analysis_file = settings.projects_dir / project_id / "analysis.json"
     if not analysis_file.exists():
         raise HTTPException(status_code=409, detail="Analyze the project before directing")
-    import json
     data = json.loads(analysis_file.read_text(encoding="utf-8"))
     provider = AIProvider(settings.ai_provider, settings.ai_base_url, settings.ai_api_key, settings.ai_model)
     return await provider.generate_story_direction(data.get("clips", []), instruction)
