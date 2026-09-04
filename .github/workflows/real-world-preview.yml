@@ -73,6 +73,44 @@ jobs:
             exit 1
           fi
 
+      - name: Verify public preview
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.request
+          import urllib.error
+
+          base = os.environ['PUBLIC_PREVIEW_URL'].rstrip('/')
+
+          def check(path):
+              url = base + path
+              last = None
+              for attempt in range(15):
+                  try:
+                      with urllib.request.urlopen(url, timeout=5) as response:
+                          body = response.read().decode('utf-8', errors='replace')
+                          print(f'PUBLIC {path}: HTTP {response.status} body={body}')
+                          if response.status == 200:
+                              return body
+                  except Exception as exc:
+                      last = exc
+                      print(f'Public endpoint not ready ({attempt + 1}/15) {url}: {exc}')
+                  time.sleep(2)
+              raise SystemExit(f'Public endpoint verification failed: {url}; last error: {last}')
+
+          check('/')
+          health = check('/health')
+          try:
+              payload = json.loads(health)
+          except json.JSONDecodeError as exc:
+              raise SystemExit(f'/health did not return valid JSON: {exc}')
+          if payload.get('status') != 'ok':
+              raise SystemExit(f'/health returned unexpected payload: {payload}')
+          print('Public preview verification: PASS')
+          PY
+
       - name: Keep preview alive
         run: |
           echo "Testing URL: $PUBLIC_PREVIEW_URL"
