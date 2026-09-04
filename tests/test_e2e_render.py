@@ -2,7 +2,7 @@ import subprocess
 from pathlib import Path
 
 from app.ffmpeg import FFmpeg
-from app.models import ClipEvidence
+from app.models import ClipEvidence, SegmentEvidence
 from app.segments import extract_segments
 from app.story import build_baseline_story
 
@@ -42,9 +42,10 @@ def test_full_analysis_to_render(tmp_path: Path) -> None:
         reasons=["synthetic E2E fixture"],
     )
 
-    clips = extract_segments(source, clip)
-    assert clips
-    timeline = build_baseline_story(clips, max_duration=3.0)
+    raw_segments = extract_segments(source, clip)
+    assert raw_segments
+    segments = [SegmentEvidence.model_validate(segment) for segment in raw_segments]
+    timeline = build_baseline_story(segments, max_duration=3.0)
     assert timeline.items
 
     rendered = []
