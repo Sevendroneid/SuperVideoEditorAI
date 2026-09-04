@@ -1,0 +1,175 @@
+name: docker-e2e
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  stack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare environment
+        run: cp .env.example .env
+
+      - name: Validate Compose configuration
+        run: docker compose config
+
+      - name: Build and start stack
+        run: docker compose up -d --build
+
+      - name: Wait for API
+        run: |
+          python - <<'PY'
+          import time
+          import urllib.request
+          for attempt in range(60):
+              try:
+                  with urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2) as response:
+                      if response.status == 200:
+                          print(response.read().decode())
+                          break
+              except Exception as exc:
+                  print(f'API not ready ({attempt + 1}/60): {exc}')
+              time.sleep(2)
+          else:
+              raise SystemExit('API did not become healthy')
+          PY
+
+      - name: Wait for web
+        run: |
+          python - <<'PY'
+          import time
+          import urllib.request
+          for attempt in range(60):
+              try:
+                  with urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=2) as response:
+                      if response.status == 200:
+                          print(response.read().decode())
+                          break
+              except Exception as exc:
+                  print(f'Web not ready ({attempt + 1}/60): {exc}')
+              time.sleep(2)
+          else:
+              raise SystemExit('Web did not become healthy')
+          PY
+
+      - name: Create deterministic video fixture
+        run: |
+          mkdir -p ci-fixture
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i testsrc=size=320x240:rate=10 \
+            -f lavfi -i sine=frequency=880:sample_rate=44100 \
+            -t 6 -pix_fmt yuv420p -c:v libx264 -c:a aac ci-fixture/source.mp4
+
+      - name: Verify full API workflow
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          base = 'http://127.0.0.1:8000'
+
+          def request(method, url, data=None, headers=None):
+              req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
+              with urllib.request.urlopen(req, timeout=30) as response:
+                  body = response.read()
+                  return response.status, body, response.headers
+
+          status, body, _ = request('POST', f'{base}/api/v1/projects')
+          assert status == 200, (status, body)
+          project = json.loads(body)['project_id']
+          print('project:', project)
+
+          fixture = Path('ci-fixture/source.mp4')
+          boundary = '----supervideo-e2e-boundary'
+          payload = (
+              f'--{boundary}\r\n'
+              'Content-Disposition: form-data; name="file"; filename="source.mp4"\r\n'
+              'Content-Type: video/mp4\r\n\r\n'
+          ).encode() + fixture.read_bytes() + f'\r\n--{boundary}--\r\n'.encode()
+          status, body, _ = request(
+              'POST',
+              f'{base}/api/v1/projects/{project}/clips',
+              data=payload,
+              headers={'Content-Type': f'multipart/form-data; boundary={boundary}'},
+          )
+          assert status == 200, (status, body)
+          print('upload:', body.decode())
+
+          status, body, _ = request('POST', f'{base}/api/v1/projects/{project}/analyze')
+          assert status == 202, (status, body)
+          analysis_job = json.loads(body)['id']
+          print('analysis job:', analysis_job)
+
+          def wait_job(job_id):
+              for attempt in range(90):
+                  status, body, _ = request('GET', f'{base}/api/v1/jobs/{job_id}')
+                  assert status == 200, (status, body)
+                  data = json.loads(body)
+                  print('job:', data['status'], data.get('progress'), data.get('message'))
+                  if data['status'] == 'completed':
+                      return data
+                  if data['status'] == 'failed':
+                      raise SystemExit(f'job failed: {json.dumps(data)}')
+                  time.sleep(2)
+              raise SystemExit('job timed out')
+
+          wait_job(analysis_job)
+
+          status, body, _ = request('GET', f'{base}/api/v1/projects/{project}/analysis')
+          assert status == 200, (status, body)
+          analysis = json.loads(body)
+          assert analysis.get('clips'), analysis
+          assert analysis.get('segments'), analysis
+          assert analysis.get('timeline', {}).get('items'), analysis
+          print('analysis verified: clips/segments/timeline present')
+
+          status, body, _ = request(
+              'POST',
+              f'{base}/api/v1/projects/{project}/director',
+              data=json.dumps({'instruction': 'make the opening stronger'}).encode(),
+              headers={'Content-Type': 'application/json'},
+          )
+          assert status == 200, (status, body)
+          director = json.loads(body)
+          assert director.get('applied') is True, director
+          assert director.get('evidence_bound') is True, director
+          print('director verified:', json.dumps(director))
+
+          status, body, _ = request('POST', f'{base}/api/v1/projects/{project}/render')
+          assert status == 202, (status, body)
+          render_job = json.loads(body)['id']
+          print('render job:', render_job)
+          wait_job(render_job)
+
+          status, body, headers = request('GET', f'{base}/api/v1/projects/{project}/output')
+          assert status == 200, (status, headers)
+          assert len(body) > 1000, len(body)
+          Path('ci-fixture/rendered.mp4').write_bytes(body)
+          print('render output verified:', len(body), 'bytes')
+
+          probe = subprocess.run(
+              ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', 'ci-fixture/rendered.mp4'],
+              check=True,
+              capture_output=True,
+              text=True,
+          )
+          duration = float(probe.stdout.strip())
+          assert duration > 0, duration
+          print('render duration:', duration)
+          PY
+
+      - name: Show stack status on failure
+        if: failure()
+        run: docker compose ps && docker compose logs --no-color --tail=200
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
