@@ -1,0 +1,82 @@
+name: real-world-preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: "How long to keep the public test URL alive"
+        required: true
+        default: "30"
+        type: choice
+        options:
+          - "15"
+          - "30"
+          - "60"
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare environment
+        run: cp .env.example .env
+
+      - name: Build and start application stack
+        run: docker compose up -d --build
+
+      - name: Wait for web
+        run: |
+          python - <<'PY'
+          import time
+          import urllib.request
+          for attempt in range(60):
+              try:
+                  with urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=2) as response:
+                      if response.status == 200:
+                          print(response.read().decode())
+                          break
+              except Exception as exc:
+                  print(f'Web not ready ({attempt + 1}/60): {exc}')
+              time.sleep(2)
+          else:
+              raise SystemExit('Web did not become healthy')
+          PY
+
+      - name: Install Cloudflare Quick Tunnel client
+        run: |
+          sudo curl -fsSL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o /usr/local/bin/cloudflared
+          sudo chmod +x /usr/local/bin/cloudflared
+          cloudflared --version
+
+      - name: Start temporary public preview
+        run: |
+          nohup cloudflared tunnel --no-autoupdate --url http://127.0.0.1:3000 > tunnel.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            URL=$(grep -oE 'https://[-a-z0-9]+\.trycloudflare\.com' tunnel.log | head -n 1 || true)
+            if [ -n "$URL" ]; then
+              echo "PUBLIC_PREVIEW_URL=$URL" >> "$GITHUB_ENV"
+              echo "::notice title=SuperVideoEditorAI real-world preview::$URL"
+              echo "## SuperVideoEditorAI real-world preview" >> "$GITHUB_STEP_SUMMARY"
+              echo "**Public URL:** $URL" >> "$GITHUB_STEP_SUMMARY"
+              echo "**Temporary duration:** ${{ inputs.duration_minutes }} minutes" >> "$GITHUB_STEP_SUMMARY"
+              echo "This is an anonymous TryCloudflare quick tunnel for testing only. It does not create or modify a Cloudflare account tunnel, DNS record, or custom domain." >> "$GITHUB_STEP_SUMMARY"
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "${PUBLIC_PREVIEW_URL:-}" ]; then
+            cat tunnel.log
+            exit 1
+          fi
+
+      - name: Keep preview alive
+        run: |
+          echo "Testing URL: $PUBLIC_PREVIEW_URL"
+          sleep $(( ${{ inputs.duration_minutes }} * 60 ))
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
