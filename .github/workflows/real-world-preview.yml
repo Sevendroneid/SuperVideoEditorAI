@@ -21,6 +21,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[preview-ci]')
     runs-on: ubuntu-latest
     timeout-minutes: 65
+    outputs:
+      preview_url: ${{ steps.tunnel.outputs.preview_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -56,14 +58,25 @@ jobs:
           cloudflared --version
 
       - name: Start temporary public preview
+        id: tunnel
         run: |
           nohup cloudflared tunnel --no-autoupdate --url http://127.0.0.1:3000 > tunnel.log 2>&1 &
           for attempt in $(seq 1 30); do
             URL=$(grep -oE 'https://[-a-z0-9]+\.trycloudflare\.com' tunnel.log | head -n 1 || true)
             if [ -n "$URL" ]; then
-              export PUBLIC_PREVIEW_URL="$URL"
               echo "PUBLIC_PREVIEW_URL=$URL" >> "$GITHUB_ENV"
-              echo "::notice title=SuperVideoEditorAI real-world preview::$URL"
+              echo "preview_url=$URL" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "$URL" > LIVE_PREVIEW_URL.txt
+              {
+                echo "## SuperVideoEditorAI live preview"
+                echo
+                echo "### Open this URL"
+                echo
+                echo "$URL"
+                echo
+                echo "Temporary anonymous TryCloudflare URL. It is valid only while this workflow run is alive."
+              } > LIVE_PREVIEW.md
+              echo "::notice title=SuperVideoEditorAI LIVE PREVIEW::$URL"
               echo "## SuperVideoEditorAI real-world preview" >> "$GITHUB_STEP_SUMMARY"
               echo "**Public URL:** $URL" >> "$GITHUB_STEP_SUMMARY"
               echo "**Temporary duration:** ${PREVIEW_DURATION_MINUTES:-15} minutes" >> "$GITHUB_STEP_SUMMARY"
@@ -76,6 +89,16 @@ jobs:
             cat tunnel.log
             exit 1
           fi
+
+      - name: Publish live preview URL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: supervideo-live-preview
+          path: |
+            LIVE_PREVIEW_URL.txt
+            LIVE_PREVIEW.md
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Verify public preview
         run: |
@@ -214,7 +237,8 @@ jobs:
         env:
           PREVIEW_DURATION_MINUTES: ${{ inputs.duration_minutes || '15' }}
         run: |
-          echo "Testing URL: $PUBLIC_PREVIEW_URL"
+          echo "LIVE PREVIEW URL: $PUBLIC_PREVIEW_URL"
+          echo "Open the artifact 'supervideo-live-preview' if the URL is not visible in the GitHub UI."
           sleep $(( PREVIEW_DURATION_MINUTES * 60 ))
 
       - name: Stop stack
