@@ -62,8 +62,8 @@ jobs:
           mkdir -p ci-fixture
           ffmpeg -hide_banner -loglevel error -y \
             -f lavfi -i testsrc=size=320x240:rate=10 \
-            -f lavfi -i sine=frequency=880:sample_rate=44100 \
-            -t 6 -pix_fmt yuv420p -c:v libx264 -c:a aac ci-fixture/source.mp4
+            -f lavfi -i sine=frequency=880:sample_rate=8000 \
+            -t 4 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest ci-fixture/source.mp4
 
       - name: Verify full API workflow
         run: |
