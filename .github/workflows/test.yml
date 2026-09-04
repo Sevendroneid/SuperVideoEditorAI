@@ -24,3 +24,7 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: pytest -q
+      - name: Run end-to-end render smoke test
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: pytest -q tests/test_e2e_render.py
