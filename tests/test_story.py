@@ -1,13 +1,13 @@
-from app.models import ClipEvidence
+from app.models import SegmentEvidence
 from app.story import build_baseline_story
 
 
-def clip(name: str, duration: float, score: float) -> ClipEvidence:
-    return ClipEvidence(path=f"/tmp/{name}.mp4", filename=name, duration_seconds=duration, width=1920, height=1080, fps=30, frame_count=900, score=score, reasons=["hd_or_better"])
+def segment(name: str, start: float, end: float, score: float) -> SegmentEvidence:
+    return SegmentEvidence(clip_path=f"/tmp/{name}.mp4", start_seconds=start, end_seconds=end, duration_seconds=end-start, score=score, evidence=["sharpness"])
 
 
 def test_story_is_deterministic_and_respects_duration():
-    result = build_baseline_story([clip("a", 4, .9), clip("b", 5, .8), clip("c", 8, .7)], max_duration=10)
+    result = build_baseline_story([segment("a", 0, 4, .9), segment("b", 0, 5, .8), segment("c", 0, 8, .7)], max_duration=10)
     assert result.total_duration_seconds == 10
     assert [item.role for item in result.items] == ["establish", "action", "detail"]
     assert result.items[-1].end_seconds == 1
