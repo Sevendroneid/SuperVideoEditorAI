@@ -2,50 +2,92 @@
 
 AI Director / AI Visual Storyteller prototype.
 
-## Prototype goal
+## What exists now
 
-Turn a small collection of raw video clips into a coherent short visual story by:
+The repository contains an executable prototype stack:
 
-1. inspecting clips,
-2. extracting measurable shot information,
-3. ranking candidate shots,
-4. constructing a story sequence,
-5. rendering the sequence with FFmpeg.
+- FastAPI API
+- Redis + Celery background worker
+- FFmpeg/ffprobe processing wrapper
+- OpenCV-based deterministic smart-segment scoring
+- Evidence-backed baseline story builder
+- Timeline JSON as the handoff between reasoning and rendering
+- Optional provider-agnostic AI Director HTTP adapter (disabled by default)
+- Static dashboard served by Nginx
+- Docker Compose development stack
+- Pytest suite and GitHub Actions CI
 
-This repository intentionally starts as a small proof-of-concept. No paid AI API is required for the first local prototype.
+The baseline pipeline does **not** pretend to perform cinematic AI. It uses measurable evidence and clearly labels the deterministic path. The optional AI adapter is disabled until a real provider configuration is supplied.
 
-## Current status
-
-**Phase 0 — architecture and prototype skeleton.**
-
-The next implementation milestone is a local pipeline that accepts sample clips and produces a machine-readable shot report and deterministic rendered sequence.
-
-## Design principles
-
-- No assumptions about footage: decisions must be traceable to extracted evidence.
-- AI reasoning and deterministic video processing remain separate.
-- Timeline data is structured and reproducible.
-- A beautiful shot is not automatically the best story shot.
-- The prototype must be tested with real footage before adding paid infrastructure.
-
-## Proposed pipeline
+## Architecture
 
 ```text
-Raw clips
-   -> technical inspection
-   -> shot/segment detection
-   -> visual/audio evidence
-   -> candidate ranking
-   -> story sequence
-   -> timeline JSON
-   -> FFmpeg render
-   -> output MP4
+Browser
+  │
+  ▼
+Nginx dashboard ──────► FastAPI
+                           │
+                           ├── Project / upload API
+                           ├── Job API
+                           └── AI Director adapter
+                           │
+                           ▼
+                         Redis
+                           │
+                           ▼
+                     Celery worker
+                           │
+              ┌────────────┴────────────┐
+              ▼                         ▼
+        ffprobe + OpenCV          Story planner
+              │                         │
+              └────────────┬────────────┘
+                           ▼
+                       Timeline JSON
+                           │
+                           ▼
+                         FFmpeg
+                           │
+                           ▼
+                        MP4 output
 ```
 
-## Cost target
+FastAPI is used for the HTTP layer; heavy work is delegated to Celery rather than held inside a request process. This follows the documented distinction between lightweight background work and heavier distributed task queues. citeturn0search0turn0search1
 
-Prototype target: **Rp0** using local/open-source components and free hosting/development tiers where applicable. Any service that introduces a charge must be explicitly verified before use.
+## Local start
 
-## Verification rule
+```bash
+cp .env.example .env
+bash scripts/setup.sh
+```
 
-Do not claim a feature works until it has been executed and its output verified.
+Dashboard: `http://localhost:3000`
+
+API docs: `http://localhost:8000/docs`
+
+Health: `http://localhost:8000/health`
+
+## Test
+
+```bash
+python -m pip install -r requirements.txt
+pytest -q
+```
+
+Or run the full container stack and then:
+
+```bash
+bash scripts/smoke_test.sh
+```
+
+## Real-world verification
+
+Follow `docs/REAL_WORLD_TEST.md`. A real release is not considered verified merely because source files exist. The required evidence is successful upload, analysis, Celery completion, valid timeline, FFmpeg render, and inspection of the resulting MP4.
+
+## Cost discipline
+
+The default configuration uses no paid AI provider. `AI_PROVIDER=disabled` is intentional. Do not add a paid API key or external service without verifying its current pricing and terms first.
+
+## Current scope boundary
+
+This is the first executable foundation, not the finished commercial editor. Advanced visual semantics, speech transcription, embeddings, relationship graphs, emotional-arc reasoning, conversational timeline mutation, generative image/video adapters, authentication, persistent database storage, and production object storage are subsequent engineering modules. They must be implemented and verified rather than represented by UI claims.
