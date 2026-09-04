@@ -25,13 +25,24 @@ class FFmpeg:
         return result
 
     def probe(self, path: Path) -> dict:
-        result = self._run([
-            self.ffprobe_bin, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)
-        ], timeout=60)
+        result = self._run([self.ffprobe_bin, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)], timeout=60)
         try:
             return json.loads(result.stdout)
         except json.JSONDecodeError as exc:
             raise FFmpegError("ffprobe returned invalid JSON") from exc
+
+    def extract_segment(self, input_path: Path, start: float, end: float, output: Path) -> Path:
+        if start < 0 or end <= start:
+            raise FFmpegError("Invalid segment boundaries")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        self._run([
+            self.ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", f"{start:.3f}", "-i", str(input_path), "-t", f"{end - start:.3f}",
+            "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-c:a", "aac", "-movflags", "+faststart", str(output)
+        ], timeout=1200)
+        return output
 
     def concat(self, inputs: list[Path], output: Path) -> Path:
         if not inputs:
@@ -39,10 +50,7 @@ class FFmpeg:
         output.parent.mkdir(parents=True, exist_ok=True)
         list_file = output.with_suffix(".concat.txt")
         try:
-            lines = []
-            for item in inputs:
-                resolved = item.resolve()
-                lines.append("file '" + str(resolved).replace("'", "'\\''") + "'")
+            lines = ["file '" + str(item.resolve()).replace("'", "'\\''") + "'" for item in inputs]
             list_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
             self._run([
                 self.ffmpeg_bin, "-hide_banner", "-loglevel", "error", "-y",
