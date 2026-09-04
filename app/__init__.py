@@ -1,0 +1,1 @@
+"""SuperVideoEditorAI application package."""
