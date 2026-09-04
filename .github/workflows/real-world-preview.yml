@@ -114,6 +114,102 @@ jobs:
           print('Public preview verification: PASS')
           PY
 
+      - name: Create deterministic public E2E fixture
+        run: |
+          docker compose exec -T api ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i testsrc=size=320x240:rate=10 \
+            -f lavfi -i sine=frequency=880:sample_rate=8000 \
+            -t 4 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest /app/storage/public-e2e-source.mp4
+          docker compose cp api:/app/storage/public-e2e-source.mp4 public-e2e-source.mp4
+
+      - name: Verify public full video workflow
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.request
+          from pathlib import Path
+
+          base = os.environ['PUBLIC_PREVIEW_URL'].rstrip('/')
+          fixture = Path('public-e2e-source.mp4')
+
+          def request(method, path, data=None, headers=None, timeout=30):
+              req = urllib.request.Request(base + path, data=data, headers=headers or {}, method=method)
+              with urllib.request.urlopen(req, timeout=timeout) as response:
+                  return response.status, response.read(), response.headers
+
+          status, body, _ = request('POST', '/api/v1/projects')
+          assert status == 200, (status, body)
+          project = json.loads(body)['project_id']
+          print('public project:', project)
+
+          boundary = '----supervideo-public-e2e-boundary'
+          payload = (
+              f'--{boundary}\r\n'
+              'Content-Disposition: form-data; name="file"; filename="source.mp4"\r\n'
+              'Content-Type: video/mp4\r\n\r\n'
+          ).encode() + fixture.read_bytes() + f'\r\n--{boundary}--\r\n'.encode()
+          status, body, _ = request(
+              'POST', f'/api/v1/projects/{project}/clips', data=payload,
+              headers={'Content-Type': f'multipart/form-data; boundary={boundary}'}, timeout=60,
+          )
+          assert status == 200, (status, body)
+          print('public upload:', body.decode())
+
+          status, body, _ = request('POST', f'/api/v1/projects/{project}/analyze')
+          assert status == 202, (status, body)
+          analysis_job = json.loads(body)['id']
+          print('public analysis job:', analysis_job)
+
+          def wait_job(job_id):
+              for attempt in range(90):
+                  status, body, _ = request('GET', f'/api/v1/jobs/{job_id}')
+                  assert status == 200, (status, body)
+                  data = json.loads(body)
+                  print('public job:', data['status'], data.get('progress'), data.get('message'))
+                  if data['status'] == 'completed':
+                      return data
+                  if data['status'] == 'failed':
+                      raise SystemExit(f'public job failed: {json.dumps(data)}')
+                  time.sleep(2)
+              raise SystemExit('public job timed out')
+
+          wait_job(analysis_job)
+
+          status, body, _ = request('GET', f'/api/v1/projects/{project}/analysis')
+          assert status == 200, (status, body)
+          analysis = json.loads(body)
+          assert analysis.get('clips'), analysis
+          assert analysis.get('segments'), analysis
+          assert analysis.get('timeline', {}).get('items'), analysis
+          print('public analysis verified: clips/segments/timeline present')
+
+          status, body, _ = request(
+              'POST', f'/api/v1/projects/{project}/director',
+              data=json.dumps({'instruction': 'make the opening stronger'}).encode(),
+              headers={'Content-Type': 'application/json'},
+          )
+          assert status == 200, (status, body)
+          director = json.loads(body)
+          assert director.get('applied') is True, director
+          assert director.get('evidence_bound') is True, director
+          print('public director verified:', json.dumps(director))
+
+          status, body, _ = request('POST', f'/api/v1/projects/{project}/render')
+          assert status == 202, (status, body)
+          render_job = json.loads(body)['id']
+          print('public render job:', render_job)
+          wait_job(render_job)
+
+          status, body, headers = request('GET', f'/api/v1/projects/{project}/output', timeout=60)
+          assert status == 200, (status, headers)
+          assert len(body) > 1000, len(body)
+          print('public rendered MP4 verified:', len(body), 'bytes')
+          assert headers.get_content_type() == 'video/mp4', headers.get_content_type()
+          print('Public full video workflow: PASS')
+          PY
+
       - name: Keep preview alive
         env:
           PREVIEW_DURATION_MINUTES: ${{ inputs.duration_minutes || '15' }}
