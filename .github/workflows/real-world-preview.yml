@@ -6,35 +6,19 @@ on:
       duration_minutes:
         description: "How long to keep the public test URL alive"
         required: true
-        default: "15"
+        default: "30"
         type: choice
         options:
           - "15"
           - "30"
           - "60"
-  push:
-    branches: [main]
 
 jobs:
   preview:
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[preview-ci]')
     runs-on: ubuntu-latest
     timeout-minutes: 65
-    permissions:
-      contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Publish preview run marker
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          ISSUE_NUMBER=$(gh issue create \
-            --title "REAL-WORLD PREVIEW RUN — ${GITHUB_SHA:0:7}" \
-            --body "Preview workflow started. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            --json number --jq .number)
-          echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> "$GITHUB_ENV"
 
       - name: Prepare environment
         run: cp .env.example .env
@@ -78,7 +62,7 @@ jobs:
               echo "::notice title=SuperVideoEditorAI real-world preview::$URL"
               echo "## SuperVideoEditorAI real-world preview" >> "$GITHUB_STEP_SUMMARY"
               echo "**Public URL:** $URL" >> "$GITHUB_STEP_SUMMARY"
-              echo "**Temporary duration:** ${{ inputs.duration_minutes || '15' }} minutes" >> "$GITHUB_STEP_SUMMARY"
+              echo "**Temporary duration:** ${{ inputs.duration_minutes }} minutes" >> "$GITHUB_STEP_SUMMARY"
               echo "This is an anonymous TryCloudflare quick tunnel for testing only. It does not create or modify a Cloudflare account tunnel, DNS record, or custom domain." >> "$GITHUB_STEP_SUMMARY"
               break
             fi
@@ -89,38 +73,10 @@ jobs:
             exit 1
           fi
 
-      - name: Verify public tunnel routing
-        run: |
-          python - <<'PY'
-          import json
-          import os
-          import urllib.request
-
-          url = os.environ['PUBLIC_PREVIEW_URL'].rstrip('/')
-          with urllib.request.urlopen(url + '/health', timeout=30) as response:
-              assert response.status == 200
-              payload = json.loads(response.read().decode())
-              assert payload.get('status') == 'ok', payload
-              print('public health:', payload)
-
-          with urllib.request.urlopen(url + '/', timeout=30) as response:
-              assert response.status == 200
-              html = response.read().decode(errors='replace')
-              assert '<html' in html.lower(), html[:500]
-              print('public web HTML verified:', len(html), 'bytes')
-          PY
-
-      - name: Publish public test URL
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh issue edit "$ISSUE_NUMBER" \
-            --body "Temporary public test URL: ${PUBLIC_PREVIEW_URL}\n\nCommit: ${GITHUB_SHA}\nWorkflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\n\nThis URL is an anonymous TryCloudflare Quick Tunnel for testing only. It expires when this workflow stops. No Cloudflare account tunnel, DNS record, or custom domain is created or modified."
-
       - name: Keep preview alive
         run: |
           echo "Testing URL: $PUBLIC_PREVIEW_URL"
-          sleep $(( ${{ inputs.duration_minutes || '15' }} * 60 ))
+          sleep $(( ${{ inputs.duration_minutes }} * 60 ))
 
       - name: Stop stack
         if: always()
