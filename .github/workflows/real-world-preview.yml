@@ -6,15 +6,18 @@ on:
       duration_minutes:
         description: "How long to keep the public test URL alive"
         required: true
-        default: "30"
+        default: "15"
         type: choice
         options:
           - "15"
           - "30"
           - "60"
+  push:
+    branches: [main]
 
 jobs:
   preview:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[preview-ci]')
     runs-on: ubuntu-latest
     timeout-minutes: 65
     steps:
@@ -62,7 +65,7 @@ jobs:
               echo "::notice title=SuperVideoEditorAI real-world preview::$URL"
               echo "## SuperVideoEditorAI real-world preview" >> "$GITHUB_STEP_SUMMARY"
               echo "**Public URL:** $URL" >> "$GITHUB_STEP_SUMMARY"
-              echo "**Temporary duration:** ${{ inputs.duration_minutes }} minutes" >> "$GITHUB_STEP_SUMMARY"
+              echo "**Temporary duration:** ${{ inputs.duration_minutes || '15' }} minutes" >> "$GITHUB_STEP_SUMMARY"
               echo "This is an anonymous TryCloudflare quick tunnel for testing only. It does not create or modify a Cloudflare account tunnel, DNS record, or custom domain." >> "$GITHUB_STEP_SUMMARY"
               break
             fi
@@ -76,7 +79,7 @@ jobs:
       - name: Keep preview alive
         run: |
           echo "Testing URL: $PUBLIC_PREVIEW_URL"
-          sleep $(( ${{ inputs.duration_minutes }} * 60 ))
+          sleep $(( ${{ inputs.duration_minutes || '15' }} * 60 ))
 
       - name: Stop stack
         if: always()
