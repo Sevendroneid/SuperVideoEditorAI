@@ -20,6 +20,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[preview-ci]')
     runs-on: ubuntu-latest
     timeout-minutes: 65
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +78,35 @@ jobs:
             cat tunnel.log
             exit 1
           fi
+
+      - name: Verify public tunnel routing
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          url = os.environ['PUBLIC_PREVIEW_URL'].rstrip('/')
+          with urllib.request.urlopen(url + '/health', timeout=30) as response:
+              assert response.status == 200
+              payload = json.loads(response.read().decode())
+              assert payload.get('status') == 'ok', payload
+              print('public health:', payload)
+
+          with urllib.request.urlopen(url + '/', timeout=30) as response:
+              assert response.status == 200
+              html = response.read().decode(errors='replace')
+              assert '<html' in html.lower(), html[:500]
+              print('public web HTML verified:', len(html), 'bytes')
+          PY
+
+      - name: Publish public test URL
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "REAL-WORLD PREVIEW — ${GITHUB_SHA:0:7}" \
+            --body "Temporary public test URL: ${PUBLIC_PREVIEW_URL}\n\nCommit: ${GITHUB_SHA}\nWorkflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\n\nThis URL is an anonymous TryCloudflare Quick Tunnel for testing only. It expires when this workflow stops. No Cloudflare account tunnel, DNS record, or custom domain is created or modified."
 
       - name: Keep preview alive
         run: |
