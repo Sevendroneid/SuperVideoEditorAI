@@ -26,6 +26,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Publish preview run marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ISSUE_NUMBER=$(gh issue create \
+            --title "REAL-WORLD PREVIEW RUN — ${GITHUB_SHA:0:7}" \
+            --body "Preview workflow started. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --json number --jq .number)
+          echo "ISSUE_NUMBER=$ISSUE_NUMBER" >> "$GITHUB_ENV"
+
       - name: Prepare environment
         run: cp .env.example .env
 
@@ -104,8 +114,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh issue create \
-            --title "REAL-WORLD PREVIEW — ${GITHUB_SHA:0:7}" \
+          gh issue edit "$ISSUE_NUMBER" \
             --body "Temporary public test URL: ${PUBLIC_PREVIEW_URL}\n\nCommit: ${GITHUB_SHA}\nWorkflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\n\nThis URL is an anonymous TryCloudflare Quick Tunnel for testing only. It expires when this workflow stops. No Cloudflare account tunnel, DNS record, or custom domain is created or modified."
 
       - name: Keep preview alive
