@@ -2,6 +2,7 @@ import subprocess
 from pathlib import Path
 
 from app.ffmpeg import FFmpeg
+from app.models import ClipEvidence
 from app.segments import extract_segments
 from app.story import build_baseline_story
 
@@ -24,8 +25,24 @@ def test_full_analysis_to_render(tmp_path: Path) -> None:
     ffmpeg = FFmpeg()
     probe = ffmpeg.probe(source)
     assert probe["streams"]
+    format_data = probe.get("format", {})
+    video = next(stream for stream in probe["streams"] if stream.get("codec_type") == "video")
+    fps_text = video.get("avg_frame_rate", "0/0")
+    numerator, denominator = (int(part) for part in fps_text.split("/", 1))
+    fps = numerator / denominator if denominator else 0.0
+    clip = ClipEvidence(
+        path=str(source),
+        filename=source.name,
+        duration_seconds=float(format_data.get("duration", 0)),
+        width=int(video.get("width", 0)),
+        height=int(video.get("height", 0)),
+        fps=fps,
+        frame_count=int(video.get("nb_frames", 0) or 0),
+        score=1.0,
+        reasons=["synthetic E2E fixture"],
+    )
 
-    clips = extract_segments(source, probe)
+    clips = extract_segments(source, clip)
     assert clips
     timeline = build_baseline_story(clips, max_duration=3.0)
     assert timeline.items
