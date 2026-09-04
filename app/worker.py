@@ -38,3 +38,25 @@ def analyze_project(self, job_id: str, project_id: str) -> dict:
     except Exception as exc:
         store.update(job_id, status="failed", progress=100, message="Analysis failed", error=str(exc))
         raise
+
+
+@celery_app.task(bind=True, name="render_project")
+def render_project(self, job_id: str, project_id: str) -> dict:
+    project_dir = settings.projects_dir / project_id
+    store = JobStore(project_dir / "jobs")
+    try:
+        store.update(job_id, status="processing", progress=10, message="Rendering timeline")
+        analysis = json.loads((project_dir / "analysis.json").read_text(encoding="utf-8"))
+        clip_paths = [Path(item["clip_path"]) for item in analysis["timeline"]["items"]]
+        if not clip_paths:
+            raise RuntimeError("Timeline contains no clips")
+        if any(not item.is_file() for item in clip_paths):
+            raise RuntimeError("Timeline references a missing clip")
+        output = settings.outputs_dir / f"{project_id}.mp4"
+        FFmpeg(settings.ffmpeg_bin, settings.ffprobe_bin).concat(clip_paths, output)
+        result = {"output": str(output), "clips_rendered": len(clip_paths)}
+        store.update(job_id, status="completed", progress=100, message="Render completed", result=result)
+        return result
+    except Exception as exc:
+        store.update(job_id, status="failed", progress=100, message="Render failed", error=str(exc))
+        raise
