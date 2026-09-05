@@ -61,8 +61,17 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
-    settings.storage_root.mkdir(parents=True, exist_ok=True)
-    settings.uploads_dir.mkdir(parents=True, exist_ok=True)
-    settings.projects_dir.mkdir(parents=True, exist_ok=True)
-    settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        settings.storage_root.mkdir(parents=True, exist_ok=True)
+        settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+        settings.projects_dir.mkdir(parents=True, exist_ok=True)
+        settings.outputs_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        if settings.storage_root == Path("/tmp/supervideoeditorai"):
+            raise
+        settings.storage_root = Path("/tmp/supervideoeditorai")
+        settings.storage_root.mkdir(parents=True, exist_ok=True)
+        settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+        settings.projects_dir.mkdir(parents=True, exist_ok=True)
+        settings.outputs_dir.mkdir(parents=True, exist_ok=True)
     return settings
