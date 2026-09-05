@@ -28,17 +28,17 @@ class Settings(BaseSettings):
     @field_validator("max_upload_bytes", mode="before")
     @classmethod
     def empty_max_upload_bytes_uses_default(cls, value):
-        if isinstance(value, str) and not value.strip():
+        if not os.getenv("MAX_UPLOAD_BYTES", "").strip() or (isinstance(value, str) and not value.strip()):
             return 524_288_000
         return value
 
     @field_validator("storage_root", mode="before")
     @classmethod
     def blank_storage_root_uses_writable_runtime_path(cls, value):
+        if os.getenv("VERCEL") == "1" and not os.getenv("STORAGE_ROOT", "").strip():
+            return Path("/tmp/supervideoeditorai")
         if isinstance(value, str) and not value.strip():
-            if os.getenv("VERCEL") == "1":
-                return "/tmp/supervideoeditorai"
-            return "./storage"
+            return Path("./storage")
         return value
 
     @property
