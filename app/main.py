@@ -1,4 +1,5 @@
 import json
+import logging
 import shutil
 import uuid
 from pathlib import Path
@@ -27,6 +28,8 @@ app.add_middleware(
 
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 supabase = SupabaseStore(settings.supabase_url, settings.supabase_service_role_key, settings.supabase_bucket)
+logger = logging.getLogger("supervideoeditorai")
+logger.info("Persistent storage enabled: %s", supabase.enabled)
 
 
 class DirectorRequest(BaseModel):
@@ -258,4 +261,3 @@ async def director(project_id: str, request: DirectorRequest):
 
     provider = AIProvider(settings.ai_provider, settings.ai_base_url, settings.ai_api_key, settings.ai_model)
     ai_context = await provider.generate_story_direction(data.get("clips", []), request.instruction)
-    return {**result, "ai": ai_context}
