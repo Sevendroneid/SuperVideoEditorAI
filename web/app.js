@@ -38,11 +38,21 @@ $("create").onclick = async () => {
 function resumableUpload(file, session, index, totalFiles) {
   return new Promise((resolve, reject) => {
     if (!window.tus) return reject(new Error("Resumable upload engine failed to load. Refresh and try again."));
+    if (!session.resumable_endpoint || !session.token) return reject(new Error("Server returned an invalid resumable upload session."));
     const upload = new tus.Upload(file, {
-      endpoint: session.signed_url,
+      endpoint: session.resumable_endpoint,
       chunkSize: 6 * 1024 * 1024,
       retryDelays: [0, 1000, 3000, 5000, 10000, 20000],
-      metadata: { filename: file.name, filetype: file.type || "video/mp4" },
+      headers: {
+        "x-signature": session.token,
+        "x-upsert": "true",
+      },
+      metadata: {
+        bucketName: "supervideo",
+        objectName: session.path,
+        contentType: file.type || "video/mp4",
+        cacheControl: "3600",
+      },
       removeFingerprintOnSuccess: true,
       onError: (error) => reject(error),
       onProgress: (bytesUploaded, bytesTotal) => {
