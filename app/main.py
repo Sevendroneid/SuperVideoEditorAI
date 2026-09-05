@@ -261,3 +261,4 @@ async def director(project_id: str, request: DirectorRequest):
 
     provider = AIProvider(settings.ai_provider, settings.ai_base_url, settings.ai_api_key, settings.ai_model)
     ai_context = await provider.generate_story_direction(data.get("clips", []), request.instruction)
+    return {**result, "ai": ai_context}
