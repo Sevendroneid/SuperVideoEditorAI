@@ -1,0 +1,122 @@
+name: production-e2e
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  render-production-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for Render production
+        env:
+          API: https://supervideoeditorai-api-v2.onrender.com
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$API/health" -o health.json; then
+              cat health.json
+              python - <<'PY'
+          import json
+          data=json.load(open('health.json'))
+          assert data.get('status') == 'ok', data
+          PY
+              exit 0
+            fi
+            sleep 5
+          done
+          echo 'Render production health check failed'
+          exit 1
+
+      - name: Generate deterministic MP4 fixture
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i testsrc=size=320x240:rate=10 \
+            -f lavfi -i sine=frequency=880:sample_rate=8000 \
+            -t 4 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest \
+            /tmp/production-e2e-source.mp4
+          test -s /tmp/production-e2e-source.mp4
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 /tmp/production-e2e-source.mp4
+
+      - name: Full production API E2E
+        env:
+          API: https://supervideoeditorai-api-v2.onrender.com
+        run: |
+          set -euo pipefail
+          PROJECT_JSON=$(curl -fsS -X POST "$API/api/v1/projects")
+          echo "$PROJECT_JSON"
+          PROJECT=$(python -c 'import json,sys; print(json.load(sys.stdin)["project_id"])' <<< "$PROJECT_JSON")
+          test -n "$PROJECT"
+
+          UPLOAD_JSON=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/clips" \
+            -F 'file=@/tmp/production-e2e-source.mp4;type=video/mp4')
+          echo "$UPLOAD_JSON"
+          python - "$UPLOAD_JSON" <<'PY'
+          import json,sys
+          data=json.loads(sys.argv[1])
+          assert data.get('persistent') is True, data
+          assert data.get('bytes',0) > 1000, data
+          PY
+
+          ANALYZE_JSON=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/analyze")
+          echo "$ANALYZE_JSON"
+          JOB=$(python -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$ANALYZE_JSON")
+
+          for attempt in $(seq 1 90); do
+            JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$JOB")
+            echo "$JOB_JSON"
+            STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON")
+            if [ "$STATUS" = completed ]; then break; fi
+            if [ "$STATUS" = failed ]; then exit 1; fi
+            sleep 2
+          done
+          test "${STATUS:-}" = completed
+
+          ANALYSIS=$(curl -fsS "$API/api/v1/projects/$PROJECT/analysis")
+          echo "$ANALYSIS"
+          python - "$ANALYSIS" <<'PY'
+          import json,sys
+          data=json.loads(sys.argv[1])
+          assert data.get('clips'), data
+          assert data.get('segments'), data
+          assert data.get('timeline',{}).get('items'), data
+          PY
+
+          DIRECTOR=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/director" \
+            -H 'Content-Type: application/json' \
+            -d '{"instruction":"make the opening stronger"}')
+          echo "$DIRECTOR"
+          python - "$DIRECTOR" <<'PY'
+          import json,sys
+          data=json.loads(sys.argv[1])
+          assert data.get('applied') is True, data
+          assert data.get('evidence_bound') is True, data
+          PY
+
+          RENDER=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/render")
+          echo "$RENDER"
+          RENDER_JOB=$(python -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$RENDER")
+
+          for attempt in $(seq 1 90); do
+            JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$RENDER_JOB")
+            echo "$JOB_JSON"
+            STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON")
+            if [ "$STATUS" = completed ]; then break; fi
+            if [ "$STATUS" = failed ]; then exit 1; fi
+            sleep 2
+          done
+          test "${STATUS:-}" = completed
+
+          curl -fsS "$API/api/v1/projects/$PROJECT/output" -o /tmp/production-output.mp4
+          test -s /tmp/production-output.mp4
+          test "$(stat -c%s /tmp/production-output.mp4)" -gt 1000
+          test "$(file -b --mime-type /tmp/production-output.mp4)" = video/mp4
+          echo "PRODUCTION FULL E2E: PASS"
+          echo "project=$PROJECT"
+          echo "output_bytes=$(stat -c%s /tmp/production-output.mp4)"
