@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     storage_root: Path = Path("./storage")
     redis_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
+    celery_task_always_eager: bool = False
     supabase_url: str | None = None
     supabase_service_role_key: str | None = Field(default=None, repr=False)
     supabase_bucket: str = "supervideo"
