@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 
 from app.config import Settings
 
@@ -19,11 +19,11 @@ def test_blank_storage_root_uses_writable_vercel_path(monkeypatch):
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.setenv("STORAGE_ROOT", "")
     settings = Settings()
-    assert settings.storage_root == "/tmp/supervideoeditorai"
+    assert settings.storage_root == Path("/tmp/supervideoeditorai")
 
 
 def test_blank_storage_root_keeps_local_default(monkeypatch):
     monkeypatch.delenv("VERCEL", raising=False)
     monkeypatch.setenv("STORAGE_ROOT", "")
     settings = Settings()
-    assert settings.storage_root == "storage"
+    assert settings.storage_root == Path("storage")
