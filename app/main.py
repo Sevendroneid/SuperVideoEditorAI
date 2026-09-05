@@ -162,7 +162,7 @@ def queue_analysis(project_id: str) -> JobRecord:
     record = JobStore(path / "jobs").create(job_id)
     if supabase.enabled:
         try:
-            supabase.create_job(project_id, job_id, "analyze")
+            supabase.create_job(project_id, job_id, "analysis")
         except Exception as exc:
             JobStore(path / "jobs").update(job_id, status="failed", progress=100, message="Unable to persist analysis job", error=str(exc))
             raise HTTPException(status_code=503, detail="Persistent job storage unavailable") from exc
