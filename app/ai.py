@@ -20,13 +20,7 @@ class AIProvider:
 
     async def generate_story_direction(self, evidence: list[dict[str, Any]], instruction: str) -> dict[str, Any]:
         if not self.enabled:
-            return {
-                "provider": "disabled",
-                "mode": "deterministic",
-                "instruction": instruction,
-                "decision": "AI provider disabled; deterministic baseline retained.",
-                "evidence_count": len(evidence),
-            }
+            return {"provider": "disabled", "mode": "deterministic", "instruction": instruction, "decision": "AI provider disabled; deterministic baseline retained.", "evidence_count": len(evidence)}
 
         payload = {
             "model": self.model,
@@ -42,6 +36,13 @@ class AIProvider:
                 response = await client.post(self.base_url, json=payload, headers=headers)
                 response.raise_for_status()
                 data = response.json()
+            return {"provider": self.provider, "mode": "remote", "response": data}
         except (httpx.HTTPError, ValueError) as exc:
-            raise AIProviderError(f"AI provider request failed: {exc}") from exc
-        return {"provider": self.provider, "response": data}
+            return {
+                "provider": self.provider,
+                "mode": "deterministic_fallback",
+                "instruction": instruction,
+                "decision": "AI provider unavailable; deterministic evidence-bound direction retained.",
+                "evidence_count": len(evidence),
+                "fallback_reason": str(exc),
+            }
