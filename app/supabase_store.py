@@ -69,11 +69,8 @@ class SupabaseStore:
         return rows[0] if rows else None
 
     def upload_file(self, local_path: Path, storage_path: str, content_type: str = "application/octet-stream", upsert: bool = False) -> None:
-        method = "PUT" if upsert else "POST"
-        headers = {"Content-Type": content_type}
-        if not upsert:
-            headers["x-upsert"] = "false"
-        self._request(method, f"/storage/v1/object/{self.bucket}/{storage_path}", content=local_path.read_bytes(), headers=headers)
+        headers = {"Content-Type": content_type, "x-upsert": "true" if upsert else "false"}
+        self._request("POST", f"/storage/v1/object/{self.bucket}/{storage_path}", content=local_path.read_bytes(), headers=headers)
 
     def download_file(self, storage_path: str, destination: Path) -> Path:
         response = self._request("GET", f"/storage/v1/object/{self.bucket}/{storage_path}")
