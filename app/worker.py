@@ -4,15 +4,15 @@ from pathlib import Path
 from celery import Celery
 
 from .analysis import analyze_directory
-from .config import get_settings
+from .config import Settings, get_settings
 from .ffmpeg import FFmpeg
 from .jobs import JobStore
 from .models import SegmentEvidence
 from .segments import extract_segments
 from .story import build_baseline_story
 
-settings = get_settings()
-celery_app = Celery("supervideoeditorai", broker=settings.redis_url, backend=settings.celery_result_backend)
+runtime_settings = Settings()
+celery_app = Celery("supervideoeditorai", broker=runtime_settings.redis_url, backend=runtime_settings.celery_result_backend)
 celery_app.conf.update(
     task_serializer="json", result_serializer="json", accept_content=["json"],
     task_track_started=True, task_time_limit=3600, task_soft_time_limit=3300,
@@ -33,6 +33,7 @@ def _timeline_source(project_dir: Path, raw_path: str) -> Path:
 
 @celery_app.task(bind=True, name="analyze_project")
 def analyze_project(self, job_id: str, project_id: str) -> dict:
+    settings = get_settings()
     store = JobStore(settings.projects_dir / project_id / "jobs")
     project_dir = settings.projects_dir / project_id
     try:
@@ -66,6 +67,7 @@ def analyze_project(self, job_id: str, project_id: str) -> dict:
 
 @celery_app.task(bind=True, name="render_project")
 def render_project(self, job_id: str, project_id: str) -> dict:
+    settings = get_settings()
     project_dir = settings.projects_dir / project_id
     store = JobStore(project_dir / "jobs")
     work_dir = project_dir / "render_segments"
