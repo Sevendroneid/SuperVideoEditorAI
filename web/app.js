@@ -1,5 +1,6 @@
 const API = window.SUPERVIDEO_API || "";
 let projectId = null;
+let persistentStorage = false;
 const $ = (id) => document.getElementById(id);
 
 async function request(path, options = {}) {
@@ -21,24 +22,52 @@ $("create").onclick = async () => {
   try {
     const data = await request("/api/v1/projects", { method: "POST" });
     setProject(data.project_id);
-    $("job").textContent = "Project ready.";
+    $("job").textContent = persistentStorage
+      ? "Project ready. Persistent storage is enabled."
+      : "Project ready. WARNING: persistent storage is not enabled.";
   } catch (e) { $("job").textContent = e.message; }
 };
 
 $("upload").onclick = async () => {
   if (!projectId) return;
-  $("uploads").textContent = "Uploading…";
   try {
     const files = [...$("files").files];
     if (!files.length) throw new Error("Select at least one video.");
+    const items = files.map((file) => `<div class="item">Uploading ${escapeHtml(file.name)}…</div>`);
+    $("uploads").innerHTML = items.join("");
+
     const results = [];
-    for (const file of files) {
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
       const form = new FormData();
       form.append("file", file, file.name);
-      results.push(await request(`/api/v1/projects/${projectId}/clips`, { method: "POST", body: form }));
+      try {
+        const result = await request(`/api/v1/projects/${projectId}/clips`, {
+          method: "POST",
+          body: form,
+        });
+        results.push(result);
+        const persistence = result.persistent ? "persistent" : "TEMPORARY — not durable";
+        items[index] = `<div class="item">✓ ${escapeHtml(result.filename)} — ${result.bytes} bytes — ${persistence}</div>`;
+      } catch (error) {
+        items[index] = `<div class="item">✗ ${escapeHtml(file.name)} — ${escapeHtml(error.message)}</div>`;
+      }
+      $("uploads").innerHTML = items.join("");
     }
-    $("uploads").innerHTML = results.map((r) => `<div class="item">✓ ${escapeHtml(r.filename)} — ${r.bytes} bytes</div>`).join("");
-  } catch (e) { $("uploads").textContent = e.message; }
+
+    if (!results.length) {
+      throw new Error("No files were uploaded successfully.");
+    }
+    if (results.some((result) => !result.persistent)) {
+      $("job").textContent = "Upload completed, but persistent storage is NOT enabled. Do not use Analyze for a release test.";
+    } else if (results.length === files.length) {
+      $("job").textContent = `${results.length} file(s) uploaded and persisted successfully.`;
+    } else {
+      $("job").textContent = `${results.length}/${files.length} file(s) uploaded successfully.`;
+    }
+  } catch (e) {
+    $("uploads").textContent = e.message;
+  }
 };
 
 function escapeHtml(value) {
@@ -57,6 +86,9 @@ async function poll(jobId) {
 
 $("analyze").onclick = async () => {
   try {
+    if (!persistentStorage) {
+      throw new Error("Persistent storage is not enabled. Uploads are not durable; analysis is blocked for release safety.");
+    }
     const job = await request(`/api/v1/projects/${projectId}/analyze`, { method: "POST" });
     const done = await poll(job.id);
     $("result").textContent = JSON.stringify(done.result, null, 2);
@@ -92,5 +124,11 @@ $("direct").onclick = async () => {
 };
 
 request("/health")
-  .then(() => { $("health").textContent = "API online"; })
+  .then((data) => {
+    persistentStorage = Boolean(data.persistent_storage);
+    $("health").textContent = persistentStorage ? "API online • storage persistent" : "API online • storage NOT persistent";
+    if (!persistentStorage) {
+      $("health").classList.add("warning");
+    }
+  })
   .catch(() => { $("health").textContent = "API offline"; });
