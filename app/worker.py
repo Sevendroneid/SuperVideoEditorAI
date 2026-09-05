@@ -41,9 +41,11 @@ def _stores(settings: Settings, project_id: str):
     return project_dir, JobStore(project_dir / "jobs"), SupabaseStore(settings.supabase_url, settings.supabase_service_role_key, settings.supabase_bucket)
 
 
-def _download_persistent_clips(store: SupabaseStore, project_id: str, project_dir: Path) -> None:
+def _download_persistent_clips(store: SupabaseStore, project_id: str, project_dir: Path, needed_names: set[str] | None = None) -> None:
     for clip in store.get_project_clips(project_id):
         filename = Path(clip["storage_path"]).name
+        if needed_names is not None and filename not in needed_names:
+            continue
         destination = project_dir / filename
         if not destination.is_file():
             store.download_file(clip["storage_path"], destination)
@@ -87,11 +89,7 @@ def analyze_project(self, job_id: str, project_id: str) -> dict:
         timeline = build_baseline_story(segments)
         if not timeline.items:
             raise RuntimeError("Unable to build a baseline story from verified segments")
-        result = {
-            "clips": [item.model_dump() for item in clips],
-            "segments": [item.model_dump() for item in segments],
-            "timeline": timeline.model_dump(),
-        }
+        result = {"clips": [item.model_dump() for item in clips], "segments": [item.model_dump() for item in segments], "timeline": timeline.model_dump()}
         analysis_file = project_dir / "analysis.json"
         analysis_file.write_text(json.dumps(result, indent=2), encoding="utf-8")
         _persist_analysis(supabase, project_id, analysis_file)
@@ -110,8 +108,8 @@ def render_project(self, job_id: str, project_id: str) -> dict:
     project_dir, local_jobs, supabase = _stores(settings, project_id)
     work_dir = project_dir / "render_segments"
     try:
-        local_jobs.update(job_id, status="processing", progress=10, message="Preparing timeline segments")
-        _persist_job(supabase, job_id, status="processing", progress=10, message="Preparing timeline segments")
+        local_jobs.update(job_id, status="processing", progress=5, message="Preparing timeline")
+        _persist_job(supabase, job_id, status="processing", progress=5, message="Preparing timeline")
         analysis_file = project_dir / "analysis.json"
         if not analysis_file.is_file() and supabase.enabled:
             artifacts = supabase.get_artifacts(project_id, "analysis")
@@ -119,12 +117,15 @@ def render_project(self, job_id: str, project_id: str) -> dict:
                 supabase.download_file(artifacts[0]["storage_path"], analysis_file)
         if not analysis_file.is_file():
             raise RuntimeError("Analysis state not found")
-        if supabase.enabled:
-            _download_persistent_clips(supabase, project_id, project_dir)
         analysis = json.loads(analysis_file.read_text(encoding="utf-8"))
         items = analysis.get("timeline", {}).get("items", [])
         if not items:
             raise RuntimeError("Timeline contains no clips")
+        if supabase.enabled:
+            needed_names = {Path(item["clip_path"]).name for item in items}
+            local_jobs.update(job_id, progress=8, message=f"Downloading {len(needed_names)} source clip(s)")
+            _persist_job(supabase, job_id, progress=8, message=f"Downloading {len(needed_names)} source clip(s)")
+            _download_persistent_clips(supabase, project_id, project_dir, needed_names)
         ffmpeg = FFmpeg(settings.ffmpeg_bin, settings.ffprobe_bin)
         work_dir.mkdir(parents=True, exist_ok=True)
         rendered = []
@@ -141,6 +142,8 @@ def render_project(self, job_id: str, project_id: str) -> dict:
             local_jobs.update(job_id, progress=progress, message=f"Rendered segment {index + 1}/{len(items)}")
             _persist_job(supabase, job_id, progress=progress, message=f"Rendered segment {index + 1}/{len(items)}")
         output = settings.outputs_dir / f"{project_id}.mp4"
+        local_jobs.update(job_id, progress=92, message="Combining rendered segments")
+        _persist_job(supabase, job_id, progress=92, message="Combining rendered segments")
         ffmpeg.concat(rendered, output)
         result = {"output": str(output), "segments_rendered": len(rendered)}
         if supabase.enabled:
