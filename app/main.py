@@ -158,7 +158,7 @@ def queue_analysis(project_id: str) -> JobRecord:
     has_local_clips = any(path.glob("*.[mM][pP]4")) or any(path.glob("*.mov")) or any(path.glob("*.mkv")) or any(path.glob("*.webm")) or any(path.glob("*.m4v")) or any(path.glob("*.avi"))
     if not has_local_clips and (not supabase.enabled or not supabase.get_project_clips(project_id)):
         raise HTTPException(status_code=409, detail="Upload at least one video before analysis")
-    job_id = uuid.uuid4().hex
+    job_id = str(uuid.uuid4())
     record = JobStore(path / "jobs").create(job_id)
     if supabase.enabled:
         try:
@@ -199,7 +199,7 @@ def queue_render(project_id: str) -> JobRecord:
     path, analysis = load_analysis(project_id)
     if not analysis.get("timeline", {}).get("items"):
         raise HTTPException(status_code=409, detail="Timeline contains no renderable clips")
-    job_id = uuid.uuid4().hex
+    job_id = str(uuid.uuid4())
     record = JobStore(path / "jobs").create(job_id)
     if supabase.enabled:
         try:
