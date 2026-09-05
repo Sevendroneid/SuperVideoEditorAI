@@ -1,8 +1,16 @@
 from fastapi import FastAPI
 
-app = FastAPI(title="SuperVideoEditorAI Vercel probe")
+try:
+    from app.main import app
+except Exception as exc:  # pragma: no cover - temporary startup diagnostic
+    diagnostic_app = FastAPI(title="SuperVideoEditorAI startup diagnostic")
 
+    @diagnostic_app.get("/health")
+    def health() -> dict:
+        return {
+            "status": "startup_failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
 
-@app.get("/health")
-def health() -> dict:
-    return {"status": "probe_ok"}
+    app = diagnostic_app
