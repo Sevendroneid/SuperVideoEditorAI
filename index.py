@@ -14,3 +14,5 @@ except Exception as exc:  # pragma: no cover - temporary startup diagnostic
         }
 
     app = diagnostic_app
+
+# Vercel startup probe marker: 2026-09-05T04:14Z
