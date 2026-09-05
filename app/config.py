@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,13 @@ class Settings(BaseSettings):
     ffprobe_bin: str = "ffprobe"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @field_validator("max_upload_bytes", mode="before")
+    @classmethod
+    def empty_max_upload_bytes_uses_default(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return 524_288_000
+        return value
 
     @property
     def cors_origin_list(self) -> list[str]:
