@@ -25,6 +25,13 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
+    @field_validator("app_name", mode="before")
+    @classmethod
+    def empty_app_name_uses_default(cls, value):
+        if not os.getenv("APP_NAME", "").strip() or (isinstance(value, str) and not value.strip()):
+            return "SuperVideoEditorAI"
+        return value
+
     @field_validator("max_upload_bytes", mode="before")
     @classmethod
     def empty_max_upload_bytes_uses_default(cls, value):
