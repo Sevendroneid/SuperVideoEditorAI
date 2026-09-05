@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 
@@ -27,7 +28,8 @@ class SupabaseStore:
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         extra_headers = kwargs.pop("headers", {})
         headers = {**self._headers(), **extra_headers}
-        with httpx.Client(timeout=60.0) as client:
+        timeout = kwargs.pop("timeout", 60.0)
+        with httpx.Client(timeout=timeout) as client:
             response = client.request(method, f"{self.url}{path}", headers=headers, **kwargs)
             if response.is_error:
                 detail = response.text[:1000]
@@ -68,14 +70,67 @@ class SupabaseStore:
         rows = response.json()
         return rows[0] if rows else None
 
+    def get_active_job(self, project_id: str, kind: str) -> dict | None:
+        project_uuid = self._project_uuid(project_id)
+        response = self._request(
+            "GET",
+            "/rest/v1/jobs",
+            params={
+                "project_id": f"eq.{project_uuid}",
+                "kind": f"eq.{kind}",
+                "status": "in.(queued,processing)",
+                "order": "created_at.desc",
+                "limit": 1,
+            },
+        )
+        rows = response.json()
+        return rows[0] if rows else None
+
+    def create_signed_upload(self, storage_path: str) -> dict:
+        encoded_path = quote(storage_path, safe="/")
+        response = self._request(
+            "POST",
+            f"/storage/v1/object/upload/sign/{self.bucket}/{encoded_path}",
+            headers={"x-upsert": "true", "Content-Type": "application/json"},
+            json={},
+        )
+        data = response.json()
+        relative_url = data.get("url")
+        if not relative_url:
+            raise RuntimeError("Supabase did not return a signed upload URL")
+        signed_url = f"{self.url}{relative_url}" if relative_url.startswith("/") else relative_url
+        token = signed_url.split("token=", 1)[1] if "token=" in signed_url else ""
+        if not token:
+            raise RuntimeError("Supabase did not return a signed upload token")
+        return {"path": storage_path, "signed_url": signed_url, "token": token}
+
+    def create_signed_download(self, storage_path: str, expires_in: int = 3600) -> str:
+        encoded_path = quote(storage_path, safe="/")
+        response = self._request(
+            "POST",
+            f"/storage/v1/object/sign/{self.bucket}/{encoded_path}",
+            headers={"Content-Type": "application/json"},
+            json={"expiresIn": expires_in},
+        )
+        signed_url = response.json().get("signedURL")
+        if not signed_url:
+            raise RuntimeError("Supabase did not return a signed download URL")
+        return f"{self.url}{signed_url}" if signed_url.startswith("/") else signed_url
+
     def upload_file(self, local_path: Path, storage_path: str, content_type: str = "application/octet-stream", upsert: bool = False) -> None:
         headers = {"Content-Type": content_type, "x-upsert": "true" if upsert else "false"}
-        self._request("POST", f"/storage/v1/object/{self.bucket}/{storage_path}", content=local_path.read_bytes(), headers=headers)
+        self._request("POST", f"/storage/v1/object/{self.bucket}/{storage_path}", content=local_path.read_bytes(), headers=headers, timeout=300.0)
 
     def download_file(self, storage_path: str, destination: Path) -> Path:
-        response = self._request("GET", f"/storage/v1/object/{self.bucket}/{storage_path}")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(response.content)
+        with httpx.Client(timeout=300.0) as client:
+            with client.stream("GET", f"{self.url}/storage/v1/object/{self.bucket}/{storage_path}", headers=self._headers()) as response:
+                if response.is_error:
+                    detail = response.read().decode("utf-8", errors="replace")[:1000]
+                    raise RuntimeError(f"Supabase GET /storage/v1/object/{self.bucket}/{storage_path} failed with HTTP {response.status_code}: {detail}")
+                with destination.open("wb") as output:
+                    for chunk in response.iter_bytes(1024 * 1024):
+                        output.write(chunk)
         return destination
 
     def create_artifact(self, project_id: str, artifact_type: str, storage_path: str, metadata: dict | None = None) -> None:
