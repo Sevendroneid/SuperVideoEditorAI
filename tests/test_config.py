@@ -1,3 +1,5 @@
+import os
+
 from app.config import Settings
 
 
@@ -11,3 +13,17 @@ def test_explicit_max_upload_bytes_is_preserved(monkeypatch):
     monkeypatch.setenv("MAX_UPLOAD_BYTES", "123456")
     settings = Settings()
     assert settings.max_upload_bytes == 123456
+
+
+def test_blank_storage_root_uses_writable_vercel_path(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("STORAGE_ROOT", "")
+    settings = Settings()
+    assert settings.storage_root == "/tmp/supervideoeditorai"
+
+
+def test_blank_storage_root_keeps_local_default(monkeypatch):
+    monkeypatch.delenv("VERCEL", raising=False)
+    monkeypatch.setenv("STORAGE_ROOT", "")
+    settings = Settings()
+    assert settings.storage_root == "storage"
