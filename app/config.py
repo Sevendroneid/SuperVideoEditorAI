@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -29,6 +30,15 @@ class Settings(BaseSettings):
     def empty_max_upload_bytes_uses_default(cls, value):
         if isinstance(value, str) and not value.strip():
             return 524_288_000
+        return value
+
+    @field_validator("storage_root", mode="before")
+    @classmethod
+    def blank_storage_root_uses_writable_runtime_path(cls, value):
+        if isinstance(value, str) and not value.strip():
+            if os.getenv("VERCEL") == "1":
+                return "/tmp/supervideoeditorai"
+            return "./storage"
         return value
 
     @property
