@@ -32,6 +32,27 @@ class Settings(BaseSettings):
             return "SuperVideoEditorAI"
         return value
 
+    @field_validator("environment", mode="before")
+    @classmethod
+    def empty_environment_uses_default(cls, value):
+        if not os.getenv("ENVIRONMENT", "").strip() or (isinstance(value, str) and not value.strip()):
+            return "development"
+        return value
+
+    @field_validator("api_prefix", mode="before")
+    @classmethod
+    def empty_api_prefix_uses_default(cls, value):
+        if not os.getenv("API_PREFIX", "").strip() or (isinstance(value, str) and not value.strip()):
+            return "/api/v1"
+        return value
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def empty_cors_origins_uses_default(cls, value):
+        if not os.getenv("CORS_ORIGINS", "").strip() or (isinstance(value, str) and not value.strip()):
+            return "http://localhost:3000,http://localhost:5173"
+        return value
+
     @field_validator("max_upload_bytes", mode="before")
     @classmethod
     def empty_max_upload_bytes_uses_default(cls, value):
