@@ -219,9 +219,17 @@ def download_output(project_id: str):
     project_path(project_id)
     path = (settings.outputs_dir / f"{project_id}.mp4").resolve()
     outputs_root = settings.outputs_dir.resolve()
-    if path.parent != outputs_root or not path.is_file():
-        raise HTTPException(status_code=404, detail="Rendered output not found")
-    return FileResponse(path, media_type="video/mp4", filename="supervideo-story.mp4")
+    if path.parent == outputs_root and path.is_file():
+        return FileResponse(path, media_type="video/mp4", filename="supervideo-story.mp4")
+    if supabase.enabled:
+        artifacts = supabase.get_artifacts(project_id, "render")
+        if artifacts:
+            remote_path = artifacts[0]["storage_path"]
+            local_output = settings.outputs_dir / f"{project_id}.mp4"
+            supabase.download_file(remote_path, local_output)
+            if local_output.is_file():
+                return FileResponse(local_output, media_type="video/mp4", filename="supervideo-story.mp4")
+    raise HTTPException(status_code=404, detail="Rendered output not found")
 
 
 @app.post(f"{settings.api_prefix}/projects/{{project_id}}/director")
@@ -237,11 +245,12 @@ async def director(project_id: str, request: DirectorRequest):
     if result.get("applied"):
         data["timeline"] = timeline.model_dump()
         data["director_history"] = data.get("director_history", []) + [result]
-        (project_dir / "analysis.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+        analysis_file = project_dir / "analysis.json"
+        analysis_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
         if supabase.enabled:
             storage_path = f"{project_id}/analysis.json"
             try:
-                supabase.upload_file(project_dir / "analysis.json", storage_path, "application/json")
+                supabase.upload_file(analysis_file, storage_path, "application/json", upsert=True)
                 supabase.create_artifact(project_id, "analysis", storage_path, {"updated_by": "director"})
             except Exception as exc:
                 raise HTTPException(status_code=503, detail="Unable to persist director update") from exc
