@@ -29,7 +29,9 @@ class SupabaseStore:
         headers = {**self._headers(), **extra_headers}
         with httpx.Client(timeout=60.0) as client:
             response = client.request(method, f"{self.url}{path}", headers=headers, **kwargs)
-            response.raise_for_status()
+            if response.is_error:
+                detail = response.text[:1000]
+                raise RuntimeError(f"Supabase {method} {path} failed with HTTP {response.status_code}: {detail}")
             return response
 
     def create_project(self, project_id: str) -> None:
