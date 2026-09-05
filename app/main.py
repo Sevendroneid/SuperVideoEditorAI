@@ -20,8 +20,10 @@ app.add_middleware(
     allow_origins=settings.cors_origin_list,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
-    allow_headers=["*"],
+    allow_headers=["*"] ,
 )
+
+WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
 
 
 class DirectorRequest(BaseModel):
@@ -49,6 +51,21 @@ def load_analysis(project_id: str) -> tuple[Path, dict]:
         return path, json.loads(analysis_file.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=500, detail="Analysis state is unreadable") from exc
+
+
+@app.get("/")
+def dashboard():
+    return FileResponse(WEB_ROOT / "index.html", media_type="text/html")
+
+
+@app.get("/app.js")
+def dashboard_script():
+    return FileResponse(WEB_ROOT / "app.js", media_type="application/javascript")
+
+
+@app.get("/styles.css")
+def dashboard_styles():
+    return FileResponse(WEB_ROOT / "styles.css", media_type="text/css")
 
 
 @app.get("/health")
