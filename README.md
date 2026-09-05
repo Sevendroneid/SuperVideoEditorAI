@@ -84,6 +84,8 @@ bash scripts/smoke_test.sh
 
 Follow `docs/REAL_WORLD_TEST.md`. A real release is not considered verified merely because source files exist. The required evidence is successful upload, analysis, Celery completion, valid timeline, FFmpeg render, and inspection of the resulting MP4.
 
+The repository also contains an automated public-preview workflow that builds the Docker stack, exposes it through a temporary TryCloudflare URL, and executes the complete upload → analysis → director → render → MP4-output flow against that public endpoint.
+
 ## Cost discipline
 
 The default configuration uses no paid AI provider. `AI_PROVIDER=disabled` is intentional. Do not add a paid API key or external service without verifying its current pricing and terms first.
