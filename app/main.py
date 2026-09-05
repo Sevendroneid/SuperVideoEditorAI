@@ -1,4 +1,5 @@
 import json
+import shutil
 import uuid
 from pathlib import Path
 
@@ -39,20 +40,35 @@ def project_path(project_id: str) -> Path:
         raise HTTPException(status_code=400, detail="Invalid project id")
     path = (settings.projects_dir / project_id).resolve()
     projects_root = settings.projects_dir.resolve()
-    if path.parent != projects_root or not path.is_dir():
+    if path.parent != projects_root:
         raise HTTPException(status_code=404, detail="Project not found")
+    if not path.is_dir():
+        if supabase.enabled and supabase.get_project(project_id):
+            path.mkdir(parents=True, exist_ok=True)
+            (path / "jobs").mkdir(exist_ok=True)
+        else:
+            raise HTTPException(status_code=404, detail="Project not found")
     return path
 
 
 def load_analysis(project_id: str) -> tuple[Path, dict]:
     path = project_path(project_id)
     analysis_file = path / "analysis.json"
-    if not analysis_file.is_file():
-        raise HTTPException(status_code=409, detail="Analyze the project first")
-    try:
-        return path, json.loads(analysis_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=500, detail="Analysis state is unreadable") from exc
+    if analysis_file.is_file():
+        try:
+            return path, json.loads(analysis_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=500, detail="Analysis state is unreadable") from exc
+    if supabase.enabled:
+        artifacts = supabase.get_artifacts(project_id, "analysis")
+        if artifacts:
+            local_copy = path / "analysis.json"
+            supabase.download_file(artifacts[0]["storage_path"], local_copy)
+            try:
+                return path, json.loads(local_copy.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise HTTPException(status_code=500, detail="Persisted analysis state is unreadable") from exc
+    raise HTTPException(status_code=409, detail="Analyze the project first")
 
 
 @app.get("/")
@@ -85,7 +101,7 @@ def create_project() -> dict:
         try:
             supabase.create_project(project_id)
         except Exception as exc:
-            path.rmdir()
+            shutil.rmtree(path, ignore_errors=True)
             raise HTTPException(status_code=503, detail="Persistent project storage unavailable") from exc
     return {"project_id": project_id}
 
@@ -136,7 +152,8 @@ def queue_analysis(project_id: str) -> JobRecord:
     from .worker import analyze_project
 
     path = project_path(project_id)
-    if not any(path.glob("*.[mM][pP]4")) and not any(path.glob("*.mov")) and not any(path.glob("*.mkv")) and not any(path.glob("*.webm")) and not any(path.glob("*.m4v")) and not any(path.glob("*.avi")):
+    has_local_clips = any(path.glob("*.[mM][pP]4")) or any(path.glob("*.mov")) or any(path.glob("*.mkv")) or any(path.glob("*.webm")) or any(path.glob("*.m4v")) or any(path.glob("*.avi"))
+    if not has_local_clips and (not supabase.enabled or not supabase.get_project_clips(project_id)):
         raise HTTPException(status_code=409, detail="Upload at least one video before analysis")
     job_id = uuid.uuid4().hex
     record = JobStore(path / "jobs").create(job_id)
@@ -221,6 +238,13 @@ async def director(project_id: str, request: DirectorRequest):
         data["timeline"] = timeline.model_dump()
         data["director_history"] = data.get("director_history", []) + [result]
         (project_dir / "analysis.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+        if supabase.enabled:
+            storage_path = f"{project_id}/analysis.json"
+            try:
+                supabase.upload_file(project_dir / "analysis.json", storage_path, "application/json")
+                supabase.create_artifact(project_id, "analysis", storage_path, {"updated_by": "director"})
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail="Unable to persist director update") from exc
         result["timeline"] = timeline.model_dump()
 
     provider = AIProvider(settings.ai_provider, settings.ai_base_url, settings.ai_api_key, settings.ai_model)
