@@ -1,6 +1,5 @@
 import json
 import shutil
-import tempfile
 from pathlib import Path
 
 from celery import Celery
@@ -19,6 +18,7 @@ celery_app = Celery("supervideoeditorai", broker=runtime_settings.redis_url, bac
 celery_app.conf.update(
     task_serializer="json", result_serializer="json", accept_content=["json"],
     task_track_started=True, task_time_limit=3600, task_soft_time_limit=3300,
+    task_always_eager=runtime_settings.celery_task_always_eager,
 )
 
 
