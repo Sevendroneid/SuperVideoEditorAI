@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -87,7 +87,14 @@ class SupabaseStore:
         token = signed_url.split("token=", 1)[1] if "token=" in signed_url else ""
         if not token:
             raise RuntimeError("Supabase did not return a signed upload token")
-        return {"path": storage_path, "signed_url": signed_url, "token": token}
+        parsed = urlparse(self.url)
+        project_host = parsed.hostname or ""
+        if project_host.endswith(".supabase.co"):
+            project_ref = project_host[:-len(".supabase.co")]
+            resumable_endpoint = f"https://{project_ref}.storage.supabase.co/storage/v1/upload/resumable"
+        else:
+            resumable_endpoint = f"{self.url}/storage/v1/upload/resumable"
+        return {"path": storage_path, "signed_url": signed_url, "token": token, "resumable_endpoint": resumable_endpoint}
 
     def storage_object_info(self, storage_path: str) -> dict:
         encoded_path = quote(storage_path, safe="/")
