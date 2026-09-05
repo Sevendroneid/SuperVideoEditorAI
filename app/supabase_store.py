@@ -79,7 +79,18 @@ class SupabaseStore:
         return destination
 
     def create_artifact(self, project_id: str, artifact_type: str, storage_path: str, metadata: dict | None = None) -> None:
-        self._request("POST", "/rest/v1/project_artifacts", json={"project_id": self._project_uuid(project_id), "artifact_type": artifact_type, "storage_path": storage_path, "metadata": metadata or {}})
+        project_uuid = self._project_uuid(project_id)
+        payload = {"storage_path": storage_path, "metadata": metadata or {}}
+        response = self._request(
+            "PATCH",
+            "/rest/v1/project_artifacts",
+            params={"project_id": f"eq.{project_uuid}", "artifact_type": f"eq.{artifact_type}"},
+            headers={"Prefer": "return=representation"},
+            json=payload,
+        )
+        if response.json():
+            return
+        self._request("POST", "/rest/v1/project_artifacts", json={"project_id": project_uuid, "artifact_type": artifact_type, **payload})
 
     def get_artifacts(self, project_id: str, artifact_type: str | None = None) -> list[dict]:
         params = {"project_id": f"eq.{self._project_uuid(project_id)}", "order": "created_at.desc"}
