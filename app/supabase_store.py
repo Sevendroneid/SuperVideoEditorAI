@@ -40,23 +40,29 @@ class SupabaseStore:
         rows = response.json()
         return rows[0] if rows else None
 
+    def _project_uuid(self, project_id: str) -> str:
+        project = self.get_project(project_id)
+        if not project or not project.get("id"):
+            raise RuntimeError(f"Project not found in persistent storage: {project_id}")
+        return str(project["id"])
+
     def create_clip(self, project_id: str, filename: str, storage_path: str, size: int) -> str:
         clip_id = str(uuid.uuid4())
         self._request("POST", "/rest/v1/clips", json={
-            "id": clip_id, "project_id": project_id, "original_filename": filename,
+            "id": clip_id, "project_id": self._project_uuid(project_id), "original_filename": filename,
             "storage_path": storage_path, "bytes": size,
         })
         return clip_id
 
     def get_project_clips(self, project_id: str) -> list[dict]:
         response = self._request("GET", "/rest/v1/clips", params={
-            "project_id": f"eq.{project_id}", "order": "created_at.asc"
+            "project_id": f"eq.{self._project_uuid(project_id)}", "order": "created_at.asc"
         })
         return response.json()
 
     def create_job(self, project_id: str, job_id: str, kind: str) -> None:
         self._request("POST", "/rest/v1/jobs", json={
-            "id": job_id, "project_id": project_id, "job_key": job_id,
+            "id": job_id, "project_id": self._project_uuid(project_id), "job_key": job_id,
             "kind": kind, "status": "queued", "progress": 0,
         })
 
@@ -83,14 +89,14 @@ class SupabaseStore:
 
     def create_artifact(self, project_id: str, artifact_type: str, storage_path: str, metadata: dict | None = None) -> None:
         self._request("POST", "/rest/v1/project_artifacts", json={
-            "project_id": project_id,
+            "project_id": self._project_uuid(project_id),
             "artifact_type": artifact_type,
             "storage_path": storage_path,
             "metadata": metadata or {},
         })
 
     def get_artifacts(self, project_id: str, artifact_type: str | None = None) -> list[dict]:
-        params = {"project_id": f"eq.{project_id}", "order": "created_at.desc"}
+        params = {"project_id": f"eq.{self._project_uuid(project_id)}", "order": "created_at.desc"}
         if artifact_type:
             params["artifact_type"] = f"eq.{artifact_type}"
         return self._request("GET", "/rest/v1/project_artifacts", params=params).json()
