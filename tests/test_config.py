@@ -1,0 +1,13 @@
+from app.config import Settings
+
+
+def test_blank_max_upload_bytes_uses_default(monkeypatch):
+    monkeypatch.setenv("MAX_UPLOAD_BYTES", "")
+    settings = Settings()
+    assert settings.max_upload_bytes == 524_288_000
+
+
+def test_explicit_max_upload_bytes_is_preserved(monkeypatch):
+    monkeypatch.setenv("MAX_UPLOAD_BYTES", "123456")
+    settings = Settings()
+    assert settings.max_upload_bytes == 123456
