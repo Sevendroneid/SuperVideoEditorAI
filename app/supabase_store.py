@@ -72,28 +72,13 @@ class SupabaseStore:
 
     def get_active_job(self, project_id: str, kind: str) -> dict | None:
         project_uuid = self._project_uuid(project_id)
-        response = self._request(
-            "GET",
-            "/rest/v1/jobs",
-            params={
-                "project_id": f"eq.{project_uuid}",
-                "kind": f"eq.{kind}",
-                "status": "in.(queued,processing)",
-                "order": "created_at.desc",
-                "limit": 1,
-            },
-        )
+        response = self._request("GET", "/rest/v1/jobs", params={"project_id": f"eq.{project_uuid}", "kind": f"eq.{kind}", "status": "in.(queued,processing)", "order": "created_at.desc", "limit": 1})
         rows = response.json()
         return rows[0] if rows else None
 
     def create_signed_upload(self, storage_path: str) -> dict:
         encoded_path = quote(storage_path, safe="/")
-        response = self._request(
-            "POST",
-            f"/storage/v1/object/upload/sign/{self.bucket}/{encoded_path}",
-            headers={"x-upsert": "true", "Content-Type": "application/json"},
-            json={},
-        )
+        response = self._request("POST", f"/storage/v1/object/upload/sign/{self.bucket}/{encoded_path}", headers={"x-upsert": "true", "Content-Type": "application/json"}, json={})
         data = response.json()
         relative_url = data.get("url")
         if not relative_url:
@@ -104,14 +89,14 @@ class SupabaseStore:
             raise RuntimeError("Supabase did not return a signed upload token")
         return {"path": storage_path, "signed_url": signed_url, "token": token}
 
+    def storage_object_info(self, storage_path: str) -> dict:
+        encoded_path = quote(storage_path, safe="/")
+        response = self._request("HEAD", f"/storage/v1/object/info/{self.bucket}/{encoded_path}", timeout=60.0)
+        return {"bytes": int(response.headers.get("content-length", "0")), "content_type": response.headers.get("content-type", "application/octet-stream")}
+
     def create_signed_download(self, storage_path: str, expires_in: int = 3600) -> str:
         encoded_path = quote(storage_path, safe="/")
-        response = self._request(
-            "POST",
-            f"/storage/v1/object/sign/{self.bucket}/{encoded_path}",
-            headers={"Content-Type": "application/json"},
-            json={"expiresIn": expires_in},
-        )
+        response = self._request("POST", f"/storage/v1/object/sign/{self.bucket}/{encoded_path}", headers={"Content-Type": "application/json"}, json={"expiresIn": expires_in})
         signed_url = response.json().get("signedURL")
         if not signed_url:
             raise RuntimeError("Supabase did not return a signed download URL")
@@ -136,13 +121,7 @@ class SupabaseStore:
     def create_artifact(self, project_id: str, artifact_type: str, storage_path: str, metadata: dict | None = None) -> None:
         project_uuid = self._project_uuid(project_id)
         payload = {"storage_path": storage_path, "metadata": metadata or {}}
-        response = self._request(
-            "PATCH",
-            "/rest/v1/project_artifacts",
-            params={"project_id": f"eq.{project_uuid}", "artifact_type": f"eq.{artifact_type}"},
-            headers={"Prefer": "return=representation"},
-            json=payload,
-        )
+        response = self._request("PATCH", "/rest/v1/project_artifacts", params={"project_id": f"eq.{project_uuid}", "artifact_type": f"eq.{artifact_type}"}, headers={"Prefer": "return=representation"}, json=payload)
         if response.json():
             return
         self._request("POST", "/rest/v1/project_artifacts", json={"project_id": project_uuid, "artifact_type": artifact_type, **payload})
