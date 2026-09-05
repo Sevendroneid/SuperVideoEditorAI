@@ -12,7 +12,6 @@ from .config import get_settings
 from .director import DirectorInstructionError, apply_director_instruction
 from .jobs import JobStore
 from .models import JobRecord, SegmentEvidence, Timeline
-from .worker import analyze_project, render_project
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.2.1")
@@ -104,6 +103,8 @@ async def upload_clip(project_id: str, file: UploadFile = File(...)) -> dict:
 
 @app.post(f"{settings.api_prefix}/projects/{{project_id}}/analyze", status_code=202)
 def queue_analysis(project_id: str) -> JobRecord:
+    from .worker import analyze_project
+
     path = project_path(project_id)
     if not any(path.glob("*.[mM][pP]4")) and not any(path.glob("*.mov")) and not any(path.glob("*.mkv")) and not any(path.glob("*.webm")) and not any(path.glob("*.m4v")) and not any(path.glob("*.avi")):
         raise HTTPException(status_code=409, detail="Upload at least one video before analysis")
@@ -131,6 +132,8 @@ def get_job(job_id: str):
 
 @app.post(f"{settings.api_prefix}/projects/{{project_id}}/render", status_code=202)
 def queue_render(project_id: str) -> JobRecord:
+    from .worker import render_project
+
     path, analysis = load_analysis(project_id)
     if not analysis.get("timeline", {}).get("items"):
         raise HTTPException(status_code=409, detail="Timeline contains no renderable clips")
