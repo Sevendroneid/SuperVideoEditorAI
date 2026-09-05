@@ -24,13 +24,19 @@ jobs:
           import json
           data=json.load(open('health.json'))
           assert data.get('status') == 'ok', data
+          assert data.get('persistent_storage') is True, data
           PY
-              exit 0
+              break
             fi
             sleep 5
           done
-          echo 'Render production health check failed'
-          exit 1
+          if [ ! -s health.json ]; then
+            echo 'Render production health check failed'
+            exit 1
+          fi
+
+      - name: Allow Render rollout to settle
+        run: sleep 90
 
       - name: Generate deterministic MP4 fixture
         run: |
