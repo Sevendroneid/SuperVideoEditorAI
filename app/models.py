@@ -3,7 +3,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class JobStatus(str, Enum):
@@ -64,6 +64,8 @@ class Timeline(BaseModel):
 
 
 class JobRecord(BaseModel):
+    model_config = ConfigDict(validate_assignment=True)
+
     id: str
     status: JobStatus
     created_at: datetime
