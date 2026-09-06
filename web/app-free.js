@@ -2,13 +2,14 @@ const API = window.SUPERVIDEO_API || window.location.origin;
 let projectId = null;
 const $ = (id) => document.getElementById(id);
 
-async function request(path, options = {}, attempts = 3, timeoutMs = 30000) {
+async function request(path, options = {}, attempts = 3, timeoutMs = 30000, onAttempt = null) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    if (onAttempt) onAttempt(attempt, attempts);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(`${API}${path}`, { ...options, signal: controller.signal });
+      const response = await fetch(`${API}${path}`, { ...options, signal: controller.signal, cache: "no-store" });
       const text = await response.text();
       let data;
       try { data = JSON.parse(text); } catch { data = { detail: text }; }
@@ -46,9 +47,11 @@ $("create").onclick = async () => {
   const button = $("create");
   const original = button.textContent;
   button.disabled = true;
-  $("job").textContent = "Creating project… please wait.";
+  $("job").textContent = "Connecting to server…";
   try {
-    const data = await request("/api/v1/projects", { method: "POST" }, 2, 30000);
+    const data = await request("/api/v1/projects", { method: "POST" }, 4, 90000, (attempt, total) => {
+      $("job").textContent = attempt === 1 ? "Creating project…" : `Creating project… retry ${attempt}/${total}`;
+    });
     if (!data || !data.project_id) throw new Error("Server returned an invalid project response.");
     setProject(data.project_id);
     $("job").textContent = "Project ready. Local temporary storage mode — no paid service required.";
