@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from pathlib import Path
@@ -78,12 +79,7 @@ class SupabaseStore:
 
     def create_signed_upload(self, storage_path: str) -> dict:
         encoded_path = quote(storage_path, safe="/")
-        response = self._request(
-            "POST",
-            f"/storage/v1/object/upload/sign/{self.bucket}/{encoded_path}",
-            headers={"x-upsert": "true", "Content-Type": "application/json"},
-            json={},
-        )
+        response = self._request("POST", f"/storage/v1/object/upload/sign/{self.bucket}/{encoded_path}", headers={"x-upsert": "true", "Content-Type": "application/json"}, json={})
         data = response.json()
         relative_url = data.get("url")
         if not relative_url:
@@ -139,6 +135,38 @@ class SupabaseStore:
 
     def download_file(self, storage_path: str, destination: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if storage_path.endswith(".parts.json"):
+            manifest_temp = destination.parent / f".{destination.name}.manifest"
+            self._download_single(manifest_temp, storage_path)
+            try:
+                manifest = json.loads(manifest_temp.read_text(encoding="utf-8"))
+                parts = manifest.get("parts") or []
+                expected_size = int(manifest.get("bytes", 0))
+                if not parts or expected_size <= 0:
+                    raise RuntimeError("Invalid chunk manifest")
+                temp = destination.parent / f".{destination.name}.assembling"
+                written = 0
+                try:
+                    with temp.open("wb") as output:
+                        for part_path in parts:
+                            part_temp = destination.parent / f".{Path(part_path).name}.part"
+                            self._download_single(part_temp, part_path)
+                            with part_temp.open("rb") as source:
+                                while chunk := source.read(4 * 1024 * 1024):
+                                    output.write(chunk)
+                                    written += len(chunk)
+                            part_temp.unlink(missing_ok=True)
+                    if written != expected_size:
+                        raise RuntimeError(f"Reassembled clip size mismatch: expected {expected_size}, got {written}")
+                    temp.replace(destination)
+                finally:
+                    temp.unlink(missing_ok=True)
+            finally:
+                manifest_temp.unlink(missing_ok=True)
+            return destination
+        return self._download_single(destination, storage_path)
+
+    def _download_single(self, destination: Path, storage_path: str) -> Path:
         with httpx.Client(timeout=300.0) as client:
             with client.stream("GET", f"{self.url}/storage/v1/object/{self.bucket}/{storage_path}", headers=self._headers()) as response:
                 if response.is_error:
