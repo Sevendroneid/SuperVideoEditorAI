@@ -99,8 +99,6 @@ class SupabaseStore:
         parsed_signed = urlparse(signed_url)
         query = parse_qs(parsed_signed.query, keep_blank_values=True)
         token = (query.get("token") or [""])[0]
-        # Newer Storage responses may expose the token directly. Prefer that value
-        # because it is already decoded and is exactly what x-signature expects.
         token = data.get("token") or token
         if not token or token.count(".") != 2:
             raise RuntimeError("Supabase returned an invalid signed upload token")
@@ -122,8 +120,15 @@ class SupabaseStore:
 
     def storage_object_info(self, storage_path: str) -> dict:
         encoded_path = quote(storage_path, safe="/")
-        response = self._request("HEAD", f"/storage/v1/object/info/{self.bucket}/{encoded_path}", timeout=60.0)
-        return {"bytes": int(response.headers.get("content-length", "0")), "content_type": response.headers.get("content-type", "application/octet-stream")}
+        response = self._request("GET", f"/storage/v1/object/info/{self.bucket}/{encoded_path}", timeout=60.0)
+        data = response.json()
+        size = data.get("size")
+        if size is None:
+            metadata = data.get("metadata") or {}
+            size = metadata.get("size")
+        if size is None:
+            raise RuntimeError("Supabase object metadata did not include a size")
+        return {"bytes": int(size), "content_type": data.get("contentType") or data.get("content_type") or "application/octet-stream"}
 
     def create_signed_download(self, storage_path: str, expires_in: int = 3600) -> str:
         encoded_path = quote(storage_path, safe="/")
