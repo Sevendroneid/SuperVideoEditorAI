@@ -88,21 +88,18 @@ class SupabaseStore:
         relative_url = data.get("url")
         if not relative_url:
             raise RuntimeError("Supabase did not return a signed upload URL")
-
         if relative_url.startswith("/storage/v1/"):
             signed_url = f"{self.url}{relative_url}"
         elif relative_url.startswith("/"):
             signed_url = f"{self.url}/storage/v1{relative_url}"
         else:
             signed_url = relative_url
-
         parsed_signed = urlparse(signed_url)
         query = parse_qs(parsed_signed.query, keep_blank_values=True)
         token = (query.get("token") or [""])[0]
         token = data.get("token") or token
         if not token or token.count(".") != 2:
             raise RuntimeError("Supabase returned an invalid signed upload token")
-
         parsed = urlparse(self.url)
         project_host = parsed.hostname or ""
         if project_host.endswith(".supabase.co"):
@@ -110,13 +107,7 @@ class SupabaseStore:
             resumable_endpoint = f"https://{project_ref}.storage.supabase.co/storage/v1/upload/resumable"
         else:
             resumable_endpoint = f"{self.url}/storage/v1/upload/resumable"
-
-        return {
-            "path": storage_path,
-            "signed_url": signed_url,
-            "token": token,
-            "resumable_endpoint": resumable_endpoint,
-        }
+        return {"path": storage_path, "signed_url": signed_url, "token": token, "resumable_endpoint": resumable_endpoint}
 
     def storage_object_info(self, storage_path: str) -> dict:
         encoded_path = quote(storage_path, safe="/")
@@ -141,6 +132,10 @@ class SupabaseStore:
     def upload_file(self, local_path: Path, storage_path: str, content_type: str = "application/octet-stream", upsert: bool = False) -> None:
         headers = {"Content-Type": content_type, "x-upsert": "true" if upsert else "false"}
         self._request("POST", f"/storage/v1/object/{self.bucket}/{storage_path}", content=local_path.read_bytes(), headers=headers, timeout=300.0)
+
+    def upload_bytes(self, payload: bytes, storage_path: str, content_type: str = "application/octet-stream", upsert: bool = False) -> None:
+        headers = {"Content-Type": content_type, "x-upsert": "true" if upsert else "false"}
+        self._request("POST", f"/storage/v1/object/{self.bucket}/{storage_path}", content=payload, headers=headers, timeout=300.0)
 
     def download_file(self, storage_path: str, destination: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
