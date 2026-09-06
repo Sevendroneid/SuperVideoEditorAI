@@ -1,4 +1,4 @@
-const API = window.SUPERVIDEO_API || "https://supervideoeditorai-api-v2.onrender.com";
+const API = window.SUPERVIDEO_API || "https://supervideoeditorai-api-v4.onrender.com";
 let projectId = null;
 let persistentStorage = false;
 const $ = (id) => document.getElementById(id);
