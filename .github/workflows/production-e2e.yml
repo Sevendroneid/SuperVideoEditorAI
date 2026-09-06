@@ -8,13 +8,13 @@ on:
 jobs:
   render-production-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - name: Wait for Render production
         env:
-          API: https://supervideoeditorai-api-v2.onrender.com
+          API: https://supervideoeditorai-api-v4.onrender.com
         run: |
           set -euo pipefail
           for attempt in $(seq 1 60); do
@@ -25,6 +25,7 @@ jobs:
           data=json.load(open('health.json'))
           assert data.get('status') == 'ok', data
           assert data.get('persistent_storage') is True, data
+          assert data.get('ffmpeg_ready') is True, data
           PY
               break
             fi
@@ -36,7 +37,7 @@ jobs:
           fi
 
       - name: Allow Render rollout to settle
-        run: sleep 90
+        run: sleep 60
 
       - name: Generate deterministic MP4 fixture
         run: |
@@ -52,7 +53,7 @@ jobs:
 
       - name: Full production API E2E
         env:
-          API: https://supervideoeditorai-api-v2.onrender.com
+          API: https://supervideoeditorai-api-v4.onrender.com
         run: |
           set -euo pipefail
           PROJECT_JSON=$(curl -fsS -X POST "$API/api/v1/projects")
@@ -74,12 +75,12 @@ jobs:
           echo "$ANALYZE_JSON"
           JOB=$(python -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$ANALYZE_JSON")
 
-          for attempt in $(seq 1 90); do
+          for attempt in $(seq 1 120); do
             JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$JOB")
             echo "$JOB_JSON"
             STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON")
             if [ "$STATUS" = completed ]; then break; fi
-            if [ "$STATUS" = failed ]; then exit 1; fi
+            if [ "$STATUS" = failed ]; then echo "$JOB_JSON"; exit 1; fi
             sleep 2
           done
           test "${STATUS:-}" = completed
@@ -109,12 +110,12 @@ jobs:
           echo "$RENDER"
           RENDER_JOB=$(python -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$RENDER")
 
-          for attempt in $(seq 1 90); do
+          for attempt in $(seq 1 120); do
             JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$RENDER_JOB")
             echo "$JOB_JSON"
             STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON")
             if [ "$STATUS" = completed ]; then break; fi
-            if [ "$STATUS" = failed ]; then exit 1; fi
+            if [ "$STATUS" = failed ]; then echo "$JOB_JSON"; exit 1; fi
             sleep 2
           done
           test "${STATUS:-}" = completed
