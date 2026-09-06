@@ -89,7 +89,13 @@ class SupabaseStore:
         if not relative_url:
             raise RuntimeError("Supabase did not return a signed upload URL")
 
-        signed_url = f"{self.url}{relative_url}" if relative_url.startswith("/") else relative_url
+        if relative_url.startswith("/storage/v1/"):
+            signed_url = f"{self.url}{relative_url}"
+        elif relative_url.startswith("/"):
+            signed_url = f"{self.url}/storage/v1{relative_url}"
+        else:
+            signed_url = relative_url
+
         parsed_signed = urlparse(signed_url)
         query = parse_qs(parsed_signed.query, keep_blank_values=True)
         token = (query.get("token") or [""])[0]
