@@ -31,9 +31,7 @@ function setProject(id) {
 function resumableUpload(file, session, index, totalFiles) {
   return new Promise((resolve, reject) => {
     if (!window.tus) return reject(new Error("Resumable upload engine failed to load. Refresh and try again."));
-    if (!session.resumable_endpoint || !session.token || session.token.split(".").length !== 3) {
-      return reject(new Error("Server returned an invalid signed upload token. Please refresh and retry."));
-    }
+    if (!session.resumable_endpoint || !session.token || session.token.split(".").length !== 3) return reject(new Error("Server returned an invalid signed upload token. Please refresh and try again."));
     const upload = new tus.Upload(file, {
       endpoint: session.resumable_endpoint,
       chunkSize: 6 * 1024 * 1024,
@@ -92,7 +90,7 @@ async function uploadChunked(file, index, totalFiles) {
     await signedDirectUpload(chunk, session, index, totalFiles, label);
     parts.push(session.path);
   }
-  const manifestPath = `${projectId}/${crypto.randomUUID()}.parts.json`;
+  const manifestPath = `${projectId}/${crypto.randomUUID()}.parts.mp4`;
   return await request(`/api/v1/projects/${projectId}/clips/complete`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -140,10 +138,7 @@ $("upload").onclick = async () => {
       const session = await request(`/api/v1/projects/${projectId}/clips/upload-session?filename=${encodeURIComponent(file.name)}&size=${file.size}`, { method: "POST" });
       $("uploads").children[index].textContent = `Uploading ${file.name} — 0% (${index + 1}/${files.length})`;
       const uploadMode = await uploadWithResumableFallback(file, session, index, files.length);
-      const result = await request(`/api/v1/projects/${projectId}/clips/complete`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename: file.name, storage_path: session.path, bytes: file.size }),
-      });
+      const result = await request(`/api/v1/projects/${projectId}/clips/complete`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ filename: file.name, storage_path: session.path, bytes: file.size }) });
       success += 1;
       if (uploadMode === "signed-direct") directFallbacks += 1;
       const modeLabel = uploadMode === "resumable" ? "resumable" : "secure direct";
@@ -204,18 +199,14 @@ $("direct").onclick = async () => {
   try {
     const text = $("instruction").value.trim();
     if (!text) throw new Error("Enter a creative direction.");
-    const data = await request(`/api/v1/projects/${projectId}/director`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction: text }),
-    });
+    const data = await request(`/api/v1/projects/${projectId}/director`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction: text }) });
     $("direction").textContent = JSON.stringify(data, null, 2);
     if (data.timeline) { $("result").textContent = JSON.stringify(data.timeline, null, 2); $("render").disabled = false; }
   } catch (e) { $("direction").textContent = e.message; }
 };
 
-request("/health", {}, 5)
-  .then((data) => {
-    persistentStorage = Boolean(data.persistent_storage);
-    $("health").textContent = persistentStorage ? "API online • storage persistent" : "API online • storage NOT persistent";
-    if (!persistentStorage) $("health").classList.add("warning");
-  })
-  .catch((error) => { $("health").textContent = `API offline — ${error.message}`; });
+request("/health", {}, 5).then((data) => {
+  persistentStorage = Boolean(data.persistent_storage);
+  $("health").textContent = persistentStorage ? "API online • storage persistent" : "API online • storage NOT persistent";
+  if (!persistentStorage) $("health").classList.add("warning");
+}).catch((error) => { $("health").textContent = `API offline — ${error.message}`; });
