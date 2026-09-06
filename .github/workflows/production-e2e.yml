@@ -31,17 +31,13 @@ jobs:
           done
           test -s health.json
       - name: Allow Render rollout to settle
-        run: sleep 60
+        run: sleep 5
       - name: Generate >40 MiB MP4 fixture
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
-          ffmpeg -hide_banner -loglevel error -y \
-            -f lavfi -i testsrc2=size=1280x720:rate=30 \
-            -f lavfi -i sine=frequency=880:sample_rate=48000 \
-            -t 30 -c:v libx264 -preset ultrafast -b:v 12M -pix_fmt yuv420p \
-            -c:a aac -b:a 128k -shortest /tmp/production-e2e-source.mp4
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=frequency=880:sample_rate=48000 -t 30 -c:v libx264 -preset ultrafast -b:v 12M -pix_fmt yuv420p -c:a aac -b:a 128k -shortest /tmp/production-e2e-source.mp4
           SIZE=$(stat -c%s /tmp/production-e2e-source.mp4)
           echo "fixture_bytes=$SIZE"
           test "$SIZE" -gt $((40 * 1024 * 1024))
@@ -78,23 +74,15 @@ jobs:
         run: |
           set -euo pipefail
           PROJECT_JSON=$(curl -fsS -X POST "$API/api/v1/projects")
-          echo "$PROJECT_JSON"
           PROJECT=$(python -c 'import json,sys; print(json.load(sys.stdin)["project_id"])' <<< "$PROJECT_JSON")
           UPLOAD_JSON=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/clips" -F 'file=@/tmp/production-e2e-source.mp4;type=video/mp4')
-          echo "$UPLOAD_JSON"
           python - "$UPLOAD_JSON" <<'PY'
           import json,sys
           data=json.loads(sys.argv[1]); assert data.get('persistent') is True and data.get('bytes',0)>1000,data
           PY
           ANALYZE_JSON=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/analyze")
-          echo "$ANALYZE_JSON"
           JOB=$(python -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$ANALYZE_JSON")
-          for attempt in $(seq 1 180); do
-            JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$JOB"); echo "$JOB_JSON"; STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON")
-            if [ "$STATUS" = completed ]; then break; fi
-            if [ "$STATUS" = failed ]; then exit 1; fi
-            sleep 2
-          done
+          for attempt in $(seq 1 180); do JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$JOB"); STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON"); if [ "$STATUS" = completed ]; then break; fi; if [ "$STATUS" = failed ]; then cat <<< "$JOB_JSON"; exit 1; fi; sleep 2; done
           test "${STATUS:-}" = completed
           ANALYSIS=$(curl -fsS "$API/api/v1/projects/$PROJECT/analysis")
           python - "$ANALYSIS" <<'PY'
@@ -108,12 +96,7 @@ jobs:
           PY
           RENDER=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/render")
           RENDER_JOB=$(python -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$RENDER")
-          for attempt in $(seq 1 180); do
-            JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$RENDER_JOB"); echo "$JOB_JSON"; STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON")
-            if [ "$STATUS" = completed ]; then break; fi
-            if [ "$STATUS" = failed ]; then exit 1; fi
-            sleep 2
-          done
+          for attempt in $(seq 1 180); do JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$RENDER_JOB"); STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON"); if [ "$STATUS" = completed ]; then break; fi; if [ "$STATUS" = failed ]; then cat <<< "$JOB_JSON"; exit 1; fi; sleep 2; done
           test "${STATUS:-}" = completed
           curl -fsS "$API/api/v1/projects/$PROJECT/output" -o /tmp/production-output.mp4
           test -s /tmp/production-output.mp4
