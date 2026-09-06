@@ -11,7 +11,6 @@ jobs:
     timeout-minutes: 28
     steps:
       - uses: actions/checkout@v4
-
       - name: Wait for Render production
         env:
           API: https://supervideoeditorai-api-v2.onrender.com
@@ -32,98 +31,54 @@ jobs:
             sleep 5
           done
           test -s health.json
-
       - name: Generate >40 MiB valid MP4 fixture
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
           ffmpeg -hide_banner -loglevel error -y \
-            -f lavfi -i testsrc=size=1280x720:rate=30 \
+            -f lavfi -i testsrc2=size=1280x720:rate=30 \
             -f lavfi -i sine=frequency=880:sample_rate=48000 \
-            -t 60 -c:v libx264 -preset ultrafast -b:v 6M -pix_fmt yuv420p \
+            -t 30 -c:v libx264 -preset ultrafast -b:v 12M -pix_fmt yuv420p \
             -c:a aac -b:a 128k -shortest /tmp/large-upload.mp4
           SIZE=$(stat -c%s /tmp/large-upload.mp4)
           echo "fixture_bytes=$SIZE"
           test "$SIZE" -gt $((40 * 1024 * 1024))
           test "$SIZE" -lt $((50 * 1024 * 1024))
           ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 /tmp/large-upload.mp4
-
       - name: Production chunked upload and reassembly smoke test
         env:
           API: https://supervideoeditorai-api-v2.onrender.com
         run: |
           set -euo pipefail
           python - "$API" /tmp/large-upload.mp4 <<'PY'
-          import json
-          import sys
-          import urllib.error
-          import urllib.request
+          import json, sys, urllib.error, urllib.request
           from pathlib import Path
-
-          api = sys.argv[1].rstrip('/')
-          fixture = Path(sys.argv[2])
-          data = fixture.read_bytes()
-          filename = 'production-large-upload.mp4'
-          chunk_size = 40 * 1024 * 1024
-          part_count = (len(data) + chunk_size - 1) // chunk_size
-
-          def request(method, url, body=None, headers=None):
-              req = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
+          api=sys.argv[1].rstrip('/'); data=Path(sys.argv[2]).read_bytes(); filename='production-large-upload.mp4'
+          chunk_size=40*1024*1024; part_count=(len(data)+chunk_size-1)//chunk_size
+          def request(method,url,body=None,headers=None):
+              req=urllib.request.Request(url,data=body,headers=headers or {},method=method)
               try:
-                  with urllib.request.urlopen(req, timeout=180) as response:
-                      return response.status, response.read(), dict(response.headers)
-              except urllib.error.HTTPError as exc:
-                  detail = exc.read().decode('utf-8', errors='replace')
-                  raise SystemExit(f'{method} {url} -> HTTP {exc.code}: {detail}')
-
-          _, body, _ = request('POST', f'{api}/api/v1/projects')
-          project = json.loads(body)['project_id']
-          parts = []
-
-          for part_index in range(part_count):
-              start = part_index * chunk_size
-              end = min(len(data), start + chunk_size)
-              chunk = data[start:end]
-              payload = json.dumps({'filename': filename, 'size': len(data), 'part_index': part_index, 'part_count': part_count}).encode()
-              status, body, _ = request('POST', f'{api}/api/v1/projects/{project}/clips/chunk-session', payload, {'Content-Type': 'application/json'})
-              assert status == 200, (status, body)
-              session = json.loads(body)
-              assert session['part_index'] == part_index
-              assert session['part_count'] == part_count
-              assert session['chunk_size'] == chunk_size
-              status, body, _ = request('PUT', session['signed_url'], chunk, {'Content-Type': 'video/mp4', 'x-upsert': 'true'})
-              assert status in (200, 201), (status, body)
-              parts.append(session['path'])
-              print(f'chunk {part_index + 1}/{part_count}: {len(chunk)} bytes PASS')
-
-          manifest_path = f'{project}/ci-large.parts.mp4'
-          complete_payload = json.dumps({'filename': filename, 'storage_path': manifest_path, 'bytes': len(data), 'parts': parts}).encode()
-          status, body, _ = request('POST', f'{api}/api/v1/projects/{project}/clips/complete', complete_payload, {'Content-Type': 'application/json'})
-          assert status == 200, (status, body)
-          result = json.loads(body)
-          assert result['chunked'] is True, result
-          assert result['persistent'] is True, result
-          assert result['bytes'] == len(data), result
-          assert result['parts'] == part_count, result
+                  with urllib.request.urlopen(req,timeout=180) as r: return r.status,r.read()
+              except urllib.error.HTTPError as e: raise SystemExit(f'{method} {url} -> HTTP {e.code}: {e.read().decode("utf-8",errors="replace")}')
+          _,body=request('POST',f'{api}/api/v1/projects'); project=json.loads(body)['project_id']; parts=[]
+          for i in range(part_count):
+              chunk=data[i*chunk_size:min(len(data),(i+1)*chunk_size)]
+              payload=json.dumps({'filename':filename,'size':len(data),'part_index':i,'part_count':part_count}).encode()
+              _,body=request('POST',f'{api}/api/v1/projects/{project}/clips/chunk-session',payload,{'Content-Type':'application/json'})
+              session=json.loads(body); assert session['part_index']==i; assert session['part_count']==part_count; assert session['chunk_size']==chunk_size
+              status,_=request('PUT',session['signed_url'],chunk,{'Content-Type':'video/mp4','x-upsert':'true'}); assert status in (200,201)
+              parts.append(session['path']); print(f'chunk {i+1}/{part_count}: {len(chunk)} bytes PASS')
+          manifest=f'{project}/ci-large.parts.mp4'; payload=json.dumps({'filename':filename,'storage_path':manifest,'bytes':len(data),'parts':parts}).encode()
+          status,body=request('POST',f'{api}/api/v1/projects/{project}/clips/complete',payload,{'Content-Type':'application/json'}); assert status==200,body
+          result=json.loads(body); assert result['chunked'] is True and result['persistent'] is True and result['bytes']==len(data) and result['parts']==part_count,result
           print('LARGE CHUNKED UPLOAD: PASS')
-          print('project=', project)
-          print('bytes=', len(data))
-          print('parts=', part_count)
-
-          status, body, _ = request('POST', f'{api}/api/v1/projects/{project}/analyze')
-          assert status == 202, (status, body)
-          job = json.loads(body)['id']
-          for attempt in range(180):
-              _, body, _ = request('GET', f'{api}/api/v1/jobs/{job}')
-              record = json.loads(body)
-              if record.get('status') == 'completed':
-                  print('LARGE CHUNKED ANALYSIS: PASS')
-                  break
-              if record.get('status') == 'failed':
-                  raise SystemExit(f'analysis failed: {record}')
-              import time
+          status,body=request('POST',f'{api}/api/v1/projects/{project}/analyze'); assert status==202,body; job=json.loads(body)['id']
+          import time
+          for _ in range(180):
+              _,body=request('GET',f'{api}/api/v1/jobs/{job}'); record=json.loads(body)
+              if record.get('status')=='completed': print('LARGE CHUNKED ANALYSIS: PASS'); break
+              if record.get('status')=='failed': raise SystemExit(f'analysis failed: {record}')
               time.sleep(2)
-          else:
-              raise SystemExit('analysis timed out')
+          else: raise SystemExit('analysis timed out')
           PY
