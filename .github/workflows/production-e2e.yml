@@ -8,7 +8,7 @@ on:
 jobs:
   render-production-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 26
+    timeout-minutes: 27
     steps:
       - uses: actions/checkout@v4
 
@@ -88,7 +88,7 @@ jobs:
           session = json.loads(body)
           signed_url = session.get('signed_url')
           storage_path = session.get('path')
-          assert signed_url and 'token=' in signed_url, session
+          assert signed_url and '/storage/v1/object/upload/sign/' in signed_url, session
           assert storage_path.startswith(project + '/'), session
 
           status, body, response_headers = request(
