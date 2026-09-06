@@ -1,4 +1,4 @@
-const API = window.SUPERVIDEO_API || "https://supervideoeditorai-api-v4.onrender.com";
+const API = window.SUPERVIDEO_API || "https://supervideoeditorai-api-v2.onrender.com";
 let projectId = null;
 let persistentStorage = false;
 const $ = (id) => document.getElementById(id);
@@ -43,16 +43,8 @@ function resumableUpload(file, session, index, totalFiles) {
       endpoint: session.resumable_endpoint,
       chunkSize: 6 * 1024 * 1024,
       retryDelays: [0, 1000, 3000, 5000, 10000, 20000],
-      headers: {
-        "x-signature": session.token,
-        "x-upsert": "true",
-      },
-      metadata: {
-        bucketName: "supervideo",
-        objectName: session.path,
-        contentType: file.type || "video/mp4",
-        cacheControl: "3600",
-      },
+      headers: { "x-signature": session.token, "x-upsert": "true" },
+      metadata: { bucketName: "supervideo", objectName: session.path, contentType: file.type || "video/mp4", cacheControl: "3600" },
       removeFingerprintOnSuccess: true,
       onError: (error) => reject(error),
       onProgress: (bytesUploaded, bytesTotal) => {
@@ -78,8 +70,7 @@ $("upload").onclick = async () => {
       $("uploads").children[index].textContent = `Uploading ${file.name} — 0% (${index + 1}/${files.length})`;
       await resumableUpload(file, session, index, files.length);
       const result = await request(`/api/v1/projects/${projectId}/clips/complete`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: file.name, storage_path: session.path, bytes: file.size }),
       });
       success += 1;
@@ -91,9 +82,7 @@ $("upload").onclick = async () => {
   $("job").textContent = `${success}/${files.length} file(s) uploaded successfully with resumable storage.`;
 };
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[char]));
-}
+function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[char])); }
 
 async function poll(jobId, maxMs = 30 * 60 * 1000) {
   const started = Date.now();
@@ -129,11 +118,8 @@ $("render").onclick = async () => {
     const job = await request(`/api/v1/projects/${projectId}/render`, { method: "POST" });
     const done = await poll(job.id, 30 * 60 * 1000);
     const output = await request(`/api/v1/projects/${projectId}/output-url`, {}, 5);
-    const link = $("download");
-    link.href = output.url;
-    link.download = "supervideo-story.mp4";
-    link.textContent = "Download / Open rendered MP4";
-    link.hidden = false;
+    const link = $("download"); link.href = output.url; link.download = "supervideo-story.mp4";
+    link.textContent = "Download / Open rendered MP4"; link.hidden = false;
     $("job").textContent = `${done.message} — video ready`;
   } catch (e) { $("job").textContent = e.message; }
 };
@@ -143,9 +129,7 @@ $("direct").onclick = async () => {
     const text = $("instruction").value.trim();
     if (!text) throw new Error("Enter a creative direction.");
     const data = await request(`/api/v1/projects/${projectId}/director`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ instruction: text }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction: text }),
     });
     $("direction").textContent = JSON.stringify(data, null, 2);
     if (data.timeline) { $("result").textContent = JSON.stringify(data.timeline, null, 2); $("render").disabled = false; }
