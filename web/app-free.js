@@ -2,19 +2,23 @@ const API = window.SUPERVIDEO_API || window.location.origin;
 let projectId = null;
 const $ = (id) => document.getElementById(id);
 
-async function request(path, options = {}, attempts = 3) {
+async function request(path, options = {}, attempts = 3, timeoutMs = 30000) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(`${API}${path}`, options);
+      const response = await fetch(`${API}${path}`, { ...options, signal: controller.signal });
       const text = await response.text();
       let data;
       try { data = JSON.parse(text); } catch { data = { detail: text }; }
       if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
       return data;
     } catch (error) {
-      lastError = error;
-      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 1200 * attempt));
+      lastError = error.name === "AbortError" ? new Error(`Request timed out after ${Math.round(timeoutMs / 1000)} seconds.`) : error;
+      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw lastError;
@@ -39,11 +43,21 @@ async function poll(jobId, maxMs) {
 }
 
 $("create").onclick = async () => {
+  const button = $("create");
+  const original = button.textContent;
+  button.disabled = true;
+  $("job").textContent = "Creating project… please wait.";
   try {
-    const data = await request("/api/v1/projects", { method: "POST" });
+    const data = await request("/api/v1/projects", { method: "POST" }, 2, 30000);
+    if (!data || !data.project_id) throw new Error("Server returned an invalid project response.");
     setProject(data.project_id);
     $("job").textContent = "Project ready. Local temporary storage mode — no paid service required.";
-  } catch (e) { $("job").textContent = e.message; }
+  } catch (e) {
+    $("job").textContent = `Create project failed: ${e.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
 };
 
 $("upload").onclick = async () => {
@@ -59,7 +73,7 @@ $("upload").onclick = async () => {
       const form = new FormData();
       form.append("file", file, file.name);
       $("uploads").children[i].textContent = `Uploading ${file.name}…`;
-      const result = await request(`/api/v1/projects/${projectId}/clips`, { method: "POST", body: form });
+      const result = await request(`/api/v1/projects/${projectId}/clips`, { method: "POST", body: form }, 1, 30 * 60 * 1000);
       success += 1;
       $("uploads").children[i].textContent = `✓ ${result.filename} — ${result.bytes} bytes — local temporary storage`;
     } catch (error) {
@@ -82,7 +96,6 @@ $("render").onclick = async () => {
   try {
     const job = await request(`/api/v1/projects/${projectId}/render`, { method: "POST" });
     const done = await poll(job.id, 30 * 60 * 1000);
-    const output = await request(`/api/v1/projects/${projectId}/output`);
     const link = $("download");
     link.href = `${API}/api/v1/projects/${projectId}/output`;
     link.download = "supervideo-story.mp4";
@@ -104,7 +117,7 @@ $("direct").onclick = async () => {
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[c])); }
 
-request("/health", {}, 5).then((data) => {
+request("/health", {}, 5, 15000).then((data) => {
   $("health").textContent = data.ffmpeg_ready ? "API online • FFmpeg ready • Rp0 mode" : "API online • FFmpeg unavailable";
   if (!data.ffmpeg_ready) $("health").classList.add("warning");
 }).catch((error) => { $("health").textContent = `API offline — ${error.message}`; });
