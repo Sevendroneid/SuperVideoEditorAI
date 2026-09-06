@@ -26,9 +26,9 @@ logger = logging.getLogger("supervideoeditorai")
 logger.info("Persistent storage enabled: %s", supabase.enabled)
 
 # Supabase Free currently caps a single object at 50 MB. Large source videos are
-# therefore stored as multiple <=40 MiB objects plus a small JSON manifest.
+# stored as multiple <=40 MiB objects plus a small JSON manifest object.
 CHUNK_SIZE_BYTES = 40 * 1024 * 1024
-CHUNKED_STORAGE_SUFFIX = ".parts.json"
+CHUNKED_STORAGE_SUFFIX = ".parts.mp4"
 
 class DirectorRequest(BaseModel):
     instruction: str = Field(min_length=1, max_length=500)
@@ -116,22 +116,15 @@ def create_upload_session(project_id: str, filename: str, size: int) -> dict:
 
 @app.post(f"{settings.api_prefix}/projects/{{project_id}}/clips/chunk-session")
 def create_chunk_session(project_id: str, request: ChunkSessionRequest) -> dict:
-    """Create a signed URL for one <=40 MiB source chunk."""
     project_path(project_id)
     safe_name, suffix = validate_video_filename(request.filename)
-    if request.size > settings.max_upload_bytes:
-        raise HTTPException(status_code=413, detail="File exceeds upload limit")
+    if request.size > settings.max_upload_bytes: raise HTTPException(status_code=413, detail="File exceeds upload limit")
     expected_parts = (request.size + CHUNK_SIZE_BYTES - 1) // CHUNK_SIZE_BYTES
-    if request.part_count != expected_parts or request.part_index >= request.part_count:
-        raise HTTPException(status_code=400, detail="Invalid chunk count or index")
-    if not supabase.enabled:
-        raise HTTPException(status_code=503, detail="Persistent storage is not enabled")
-    chunk_id = uuid.uuid4().hex
-    storage_path = f"{project_id}/chunks/{chunk_id}.part"
-    try:
-        signed = supabase.create_signed_upload(storage_path)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail="Unable to create chunk upload session") from exc
+    if request.part_count != expected_parts or request.part_index >= request.part_count: raise HTTPException(status_code=400, detail="Invalid chunk count or index")
+    if not supabase.enabled: raise HTTPException(status_code=503, detail="Persistent storage is not enabled")
+    storage_path = f"{project_id}/chunks/{uuid.uuid4().hex}.part"
+    try: signed = supabase.create_signed_upload(storage_path)
+    except Exception as exc: raise HTTPException(status_code=503, detail="Unable to create chunk upload session") from exc
     return {"filename": safe_name, "bytes": request.size, "part_index": request.part_index, "part_count": request.part_count, "chunk_size": CHUNK_SIZE_BYTES, **signed}
 
 @app.post(f"{settings.api_prefix}/projects/{{project_id}}/clips/complete")
@@ -141,22 +134,17 @@ def complete_upload(project_id: str, request: UploadCompleteRequest) -> dict:
     if not supabase.enabled: raise HTTPException(status_code=503, detail="Persistent storage is not enabled")
     prefix = f"{project_id}/"
     if request.parts:
-        if not request.storage_path.startswith(prefix) or not request.storage_path.endswith(CHUNKED_STORAGE_SUFFIX):
-            raise HTTPException(status_code=400, detail="Invalid chunk manifest path")
-        if any(not part.startswith(f"{project_id}/chunks/") or not part.endswith(".part") for part in request.parts):
-            raise HTTPException(status_code=400, detail="Invalid chunk storage path")
-        if request.bytes > settings.max_upload_bytes:
-            raise HTTPException(status_code=413, detail="File exceeds upload limit")
+        if not request.storage_path.startswith(prefix) or not request.storage_path.endswith(CHUNKED_STORAGE_SUFFIX): raise HTTPException(status_code=400, detail="Invalid chunk manifest path")
+        if any(not part.startswith(f"{project_id}/chunks/") or not part.endswith(".part") for part in request.parts): raise HTTPException(status_code=400, detail="Invalid chunk storage path")
+        if request.bytes > settings.max_upload_bytes: raise HTTPException(status_code=413, detail="File exceeds upload limit")
         manifest = {"version": 1, "filename": safe_name, "bytes": request.bytes, "parts": request.parts}
         try:
             for part in request.parts:
                 info = supabase.storage_object_info(part)
-                if info["bytes"] <= 0 or info["bytes"] > CHUNK_SIZE_BYTES:
-                    raise RuntimeError(f"Invalid chunk size for {part}: {info['bytes']}")
-            supabase.upload_bytes(json.dumps(manifest, separators=(",", ":")).encode("utf-8"), request.storage_path, "application/json", upsert=True)
+                if info["bytes"] <= 0 or info["bytes"] > CHUNK_SIZE_BYTES: raise RuntimeError(f"Invalid chunk size for {part}: {info['bytes']}")
+            supabase.upload_bytes(json.dumps(manifest, separators=(",", ":")).encode("utf-8"), request.storage_path, "video/mp4", upsert=True)
             supabase.create_clip(project_id, safe_name, request.storage_path, request.bytes)
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail="Unable to verify and persist chunked video") from exc
+        except Exception as exc: raise HTTPException(status_code=503, detail="Unable to verify and persist chunked video") from exc
         return {"filename": safe_name, "bytes": request.bytes, "persistent": True, "storage_path": request.storage_path, "chunked": True, "parts": len(request.parts)}
     if not request.storage_path.startswith(prefix) or Path(request.storage_path).suffix.lower() != suffix: raise HTTPException(status_code=400, detail="Invalid storage path")
     try:
