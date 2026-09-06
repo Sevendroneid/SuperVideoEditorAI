@@ -11,10 +11,8 @@ jobs:
     timeout-minutes: 28
     steps:
       - uses: actions/checkout@v4
-
       - name: Wait for Render production
-        env:
-          API: https://supervideoeditorai-api-v2.onrender.com
+        env: { API: https://supervideoeditorai-api-v2.onrender.com }
         run: |
           set -euo pipefail
           for attempt in $(seq 1 60); do
@@ -31,168 +29,92 @@ jobs:
             fi
             sleep 5
           done
-          if [ ! -s health.json ]; then
-            echo 'Render production health check failed'
-            exit 1
-          fi
-
+          test -s health.json
       - name: Allow Render rollout to settle
         run: sleep 60
-
-      - name: Generate deterministic MP4 fixture
+      - name: Generate >40 MiB MP4 fixture
         run: |
+          set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
           ffmpeg -hide_banner -loglevel error -y \
-            -f lavfi -i testsrc=size=320x240:rate=10 \
-            -f lavfi -i sine=frequency=880:sample_rate=8000 \
-            -t 4 -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest \
-            /tmp/production-e2e-source.mp4
-          test -s /tmp/production-e2e-source.mp4
+            -f lavfi -i testsrc2=size=1280x720:rate=30 \
+            -f lavfi -i sine=frequency=880:sample_rate=48000 \
+            -t 30 -c:v libx264 -preset ultrafast -b:v 12M -pix_fmt yuv420p \
+            -c:a aac -b:a 128k -shortest /tmp/production-e2e-source.mp4
+          SIZE=$(stat -c%s /tmp/production-e2e-source.mp4)
+          echo "fixture_bytes=$SIZE"
+          test "$SIZE" -gt $((40 * 1024 * 1024))
+          test "$SIZE" -lt $((50 * 1024 * 1024))
           ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 /tmp/production-e2e-source.mp4
-
-      - name: Production signed upload smoke test
-        env:
-          API: https://supervideoeditorai-api-v2.onrender.com
+      - name: Production chunked signed upload smoke test
+        env: { API: https://supervideoeditorai-api-v2.onrender.com }
         run: |
           set -euo pipefail
           python - "$API" /tmp/production-e2e-source.mp4 <<'PY'
-          import json
-          import sys
-          import urllib.error
-          import urllib.parse
-          import urllib.request
+          import json,sys,urllib.error,urllib.request
           from pathlib import Path
-
-          api = sys.argv[1].rstrip('/')
-          fixture = Path(sys.argv[2])
-          data = fixture.read_bytes()
-          filename = 'production-signed-smoke.mp4'
-
-          def request(method, url, body=None, headers=None):
-              req = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
+          api=sys.argv[1].rstrip('/'); data=Path(sys.argv[2]).read_bytes(); filename='production-large-smoke.mp4'; chunk_size=40*1024*1024; count=(len(data)+chunk_size-1)//chunk_size
+          def req(method,url,body=None,headers=None):
+              r=urllib.request.Request(url,data=body,headers=headers or {},method=method)
               try:
-                  with urllib.request.urlopen(req, timeout=120) as response:
-                      return response.status, response.read(), dict(response.headers)
-              except urllib.error.HTTPError as exc:
-                  detail = exc.read().decode('utf-8', errors='replace')
-                  raise SystemExit(f'{method} {url} -> HTTP {exc.code}: {detail}')
-
-          status, body, _ = request('POST', f'{api}/api/v1/projects')
-          assert status == 200, (status, body)
-          project = json.loads(body)['project_id']
-
-          query = urllib.parse.urlencode({'filename': filename, 'size': len(data)})
-          status, body, _ = request('POST', f'{api}/api/v1/projects/{project}/clips/upload-session?{query}')
-          assert status == 200, (status, body)
-          session = json.loads(body)
-          signed_url = session.get('signed_url')
-          storage_path = session.get('path')
-          assert signed_url and '/storage/v1/object/upload/sign/' in signed_url, session
-          assert storage_path.startswith(project + '/'), session
-
-          status, body, response_headers = request(
-              'PUT',
-              signed_url,
-              data,
-              {
-                  'Content-Type': 'video/mp4',
-                  'x-upsert': 'true',
-              },
-          )
-          assert status in (200, 201), (status, body, response_headers)
-          print('SIGNED DIRECT PUT: PASS')
-          print('uploaded_bytes=', len(data))
-
-          complete_payload = json.dumps({
-              'filename': filename,
-              'storage_path': storage_path,
-              'bytes': len(data),
-          }).encode()
-          status, body, _ = request(
-              'POST',
-              f'{api}/api/v1/projects/{project}/clips/complete',
-              complete_payload,
-              {'Content-Type': 'application/json'},
-          )
-          assert status == 200, (status, body)
-          complete = json.loads(body)
-          assert complete.get('persistent') is True, complete
-          assert complete.get('bytes') == len(data), complete
-          print('SIGNED UPLOAD COMPLETE: PASS')
-          print('project=', project)
-          print('storage_path=', storage_path)
+                  with urllib.request.urlopen(r,timeout=180) as x:return x.status,x.read()
+              except urllib.error.HTTPError as e:raise SystemExit(f'{method} {url} -> HTTP {e.code}: {e.read().decode("utf-8",errors="replace")}')
+          _,body=req('POST',f'{api}/api/v1/projects'); project=json.loads(body)['project_id']; parts=[]
+          for i in range(count):
+              chunk=data[i*chunk_size:min(len(data),(i+1)*chunk_size)]
+              payload=json.dumps({'filename':filename,'size':len(data),'part_index':i,'part_count':count}).encode()
+              _,body=req('POST',f'{api}/api/v1/projects/{project}/clips/chunk-session',payload,{'Content-Type':'application/json'}); s=json.loads(body)
+              assert s['part_index']==i and s['part_count']==count and s['chunk_size']==chunk_size,s
+              status,_=req('PUT',s['signed_url'],chunk,{'Content-Type':'video/mp4','x-upsert':'true'}); assert status in (200,201),status
+              parts.append(s['path']); print(f'chunk {i+1}/{count}: {len(chunk)} bytes PASS')
+          manifest=f'{project}/ci-large.parts.mp4'; payload=json.dumps({'filename':filename,'storage_path':manifest,'bytes':len(data),'parts':parts}).encode()
+          status,body=req('POST',f'{api}/api/v1/projects/{project}/clips/complete',payload,{'Content-Type':'application/json'}); assert status==200,body
+          result=json.loads(body); assert result.get('chunked') is True and result.get('persistent') is True and result.get('bytes')==len(data) and result.get('parts')==count,result
+          print('PRODUCTION CHUNKED UPLOAD: PASS')
           PY
-
       - name: Full production API E2E
-        env:
-          API: https://supervideoeditorai-api-v2.onrender.com
+        env: { API: https://supervideoeditorai-api-v2.onrender.com }
         run: |
           set -euo pipefail
           PROJECT_JSON=$(curl -fsS -X POST "$API/api/v1/projects")
           echo "$PROJECT_JSON"
           PROJECT=$(python -c 'import json,sys; print(json.load(sys.stdin)["project_id"])' <<< "$PROJECT_JSON")
-          test -n "$PROJECT"
-
-          UPLOAD_JSON=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/clips" \
-            -F 'file=@/tmp/production-e2e-source.mp4;type=video/mp4')
+          UPLOAD_JSON=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/clips" -F 'file=@/tmp/production-e2e-source.mp4;type=video/mp4')
           echo "$UPLOAD_JSON"
           python - "$UPLOAD_JSON" <<'PY'
           import json,sys
-          data=json.loads(sys.argv[1])
-          assert data.get('persistent') is True, data
-          assert data.get('bytes',0) > 1000, data
+          data=json.loads(sys.argv[1]); assert data.get('persistent') is True and data.get('bytes',0)>1000,data
           PY
-
           ANALYZE_JSON=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/analyze")
           echo "$ANALYZE_JSON"
           JOB=$(python -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$ANALYZE_JSON")
-
-          for attempt in $(seq 1 120); do
-            JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$JOB")
-            echo "$JOB_JSON"
-            STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON")
+          for attempt in $(seq 1 180); do
+            JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$JOB"); echo "$JOB_JSON"; STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON")
             if [ "$STATUS" = completed ]; then break; fi
-            if [ "$STATUS" = failed ]; then echo "$JOB_JSON"; exit 1; fi
+            if [ "$STATUS" = failed ]; then exit 1; fi
             sleep 2
           done
           test "${STATUS:-}" = completed
-
           ANALYSIS=$(curl -fsS "$API/api/v1/projects/$PROJECT/analysis")
-          echo "$ANALYSIS"
           python - "$ANALYSIS" <<'PY'
           import json,sys
-          data=json.loads(sys.argv[1])
-          assert data.get('clips'), data
-          assert data.get('segments'), data
-          assert data.get('timeline',{}).get('items'), data
+          data=json.loads(sys.argv[1]); assert data.get('clips') and data.get('segments') and data.get('timeline',{}).get('items'),data
           PY
-
-          DIRECTOR=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/director" \
-            -H 'Content-Type: application/json' \
-            -d '{"instruction":"make the opening stronger"}')
-          echo "$DIRECTOR"
+          DIRECTOR=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/director" -H 'Content-Type: application/json' -d '{"instruction":"make the opening stronger"}')
           python - "$DIRECTOR" <<'PY'
           import json,sys
-          data=json.loads(sys.argv[1])
-          assert data.get('applied') is True, data
-          assert data.get('evidence_bound') is True, data
+          data=json.loads(sys.argv[1]); assert data.get('applied') is True and data.get('evidence_bound') is True,data
           PY
-
           RENDER=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/render")
-          echo "$RENDER"
           RENDER_JOB=$(python -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$RENDER")
-
-          for attempt in $(seq 1 120); do
-            JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$RENDER_JOB")
-            echo "$JOB_JSON"
-            STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON")
+          for attempt in $(seq 1 180); do
+            JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$RENDER_JOB"); echo "$JOB_JSON"; STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON")
             if [ "$STATUS" = completed ]; then break; fi
-            if [ "$STATUS" = failed ]; then echo "$JOB_JSON"; exit 1; fi
+            if [ "$STATUS" = failed ]; then exit 1; fi
             sleep 2
           done
           test "${STATUS:-}" = completed
-
           curl -fsS "$API/api/v1/projects/$PROJECT/output" -o /tmp/production-output.mp4
           test -s /tmp/production-output.mp4
           test "$(stat -c%s /tmp/production-output.mp4)" -gt 1000
