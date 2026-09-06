@@ -15,6 +15,7 @@ from .director import DirectorInstructionError, apply_director_instruction
 from .jobs import JobStore
 from .models import JobRecord, SegmentEvidence, Timeline
 from .supabase_store import SupabaseStore
+from .ffmpeg import FFmpeg, FFmpegError
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.4.0")
@@ -68,7 +69,16 @@ def dashboard_script(): return FileResponse(WEB_ROOT / "app.js", media_type="app
 @app.get("/styles.css")
 def dashboard_styles(): return FileResponse(WEB_ROOT / "styles.css", media_type="text/css")
 @app.get("/health")
-def health() -> dict: return {"status":"ok","service":settings.app_name,"environment":settings.environment,"persistent_storage":supabase.enabled}
+def health() -> dict:
+    ffmpeg_ready = False
+    ffmpeg_error = None
+    try:
+        engine = FFmpeg(settings.ffmpeg_bin, settings.ffprobe_bin)
+        result = engine._run([engine.ffmpeg_bin, "-version"], timeout=15)
+        ffmpeg_ready = result.returncode == 0
+    except Exception as exc:
+        ffmpeg_error = str(exc)
+    return {"status":"ok","service":settings.app_name,"environment":settings.environment,"persistent_storage":supabase.enabled,"ffmpeg_ready":ffmpeg_ready,"ffmpeg_error":ffmpeg_error}
 
 @app.post(f"{settings.api_prefix}/projects")
 def create_project() -> dict:
