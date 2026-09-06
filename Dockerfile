@@ -16,8 +16,9 @@ COPY app ./app
 COPY web ./web
 COPY tests ./tests
 COPY scripts ./scripts
+COPY run.py ./run.py
 
 RUN mkdir -p /app/storage/uploads /app/storage/projects /app/storage/outputs
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "run.py"]
