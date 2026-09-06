@@ -1,4 +1,5 @@
 const API = window.SUPERVIDEO_API || "https://supervideoeditorai-api-v2.onrender.com";
+const CHUNK_SIZE = 40 * 1024 * 1024;
 let projectId = null;
 let persistentStorage = false;
 const $ = (id) => document.getElementById(id);
@@ -40,12 +41,7 @@ function resumableUpload(file, session, index, totalFiles) {
       headers: { "x-signature": session.token, "x-upsert": "true" },
       uploadDataDuringCreation: true,
       removeFingerprintOnSuccess: true,
-      metadata: {
-        bucketName: "supervideo",
-        objectName: session.path,
-        contentType: file.type || "video/mp4",
-        cacheControl: "3600",
-      },
+      metadata: { bucketName: "supervideo", objectName: session.path, contentType: file.type || "video/mp4", cacheControl: "3600" },
       onError: (error) => reject(error),
       onProgress: (bytesUploaded, bytesTotal) => {
         const percent = Math.floor((bytesUploaded / bytesTotal) * 100);
@@ -57,12 +53,9 @@ function resumableUpload(file, session, index, totalFiles) {
   });
 }
 
-function signedDirectUpload(file, session, index, totalFiles) {
+function signedDirectUpload(file, session, index, totalFiles, label = file.name) {
   return new Promise((resolve, reject) => {
-    if (!session.signed_url || !session.signed_url.includes("token=")) {
-      reject(new Error("Server did not return a valid signed upload URL."));
-      return;
-    }
+    if (!session.signed_url || !session.signed_url.includes("token=")) return reject(new Error("Server did not return a valid signed upload URL."));
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", session.signed_url, true);
     xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
@@ -70,18 +63,40 @@ function signedDirectUpload(file, session, index, totalFiles) {
     xhr.upload.onprogress = (event) => {
       if (!event.lengthComputable) return;
       const percent = Math.floor((event.loaded / event.total) * 100);
-      $("uploads").children[index].textContent = `Uploading ${file.name} — ${percent}% (${index + 1}/${totalFiles})`;
+      $("uploads").children[index].textContent = `Uploading ${label} — ${percent}% (${index + 1}/${totalFiles})`;
     };
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        reject(new Error(`Signed upload failed: HTTP ${xhr.status}${xhr.responseText ? ` — ${xhr.responseText.slice(0, 240)}` : ""}`));
-      }
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error(`Signed upload failed: HTTP ${xhr.status}${xhr.responseText ? ` — ${xhr.responseText.slice(0, 240)}` : ""}`));
     };
     xhr.onerror = () => reject(new Error("Network error while uploading directly to storage."));
     xhr.onabort = () => reject(new Error("Upload was cancelled."));
     xhr.send(file);
+  });
+}
+
+async function uploadChunked(file, index, totalFiles) {
+  const partCount = Math.ceil(file.size / CHUNK_SIZE);
+  const parts = [];
+  for (let partIndex = 0; partIndex < partCount; partIndex += 1) {
+    const start = partIndex * CHUNK_SIZE;
+    const end = Math.min(file.size, start + CHUNK_SIZE);
+    const chunk = file.slice(start, end);
+    const session = await request(`/api/v1/projects/${projectId}/clips/chunk-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: file.name, size: file.size, part_index: partIndex, part_count: partCount }),
+    });
+    const label = `${file.name} — part ${partIndex + 1}/${partCount}`;
+    $("uploads").children[index].textContent = `Uploading ${label} — 0% (${index + 1}/${totalFiles})`;
+    await signedDirectUpload(chunk, session, index, totalFiles, label);
+    parts.push(session.path);
+  }
+  const manifestPath = `${projectId}/${crypto.randomUUID()}.parts.json`;
+  return await request(`/api/v1/projects/${projectId}/clips/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: file.name, storage_path: manifestPath, bytes: file.size, parts }),
   });
 }
 
@@ -111,9 +126,17 @@ $("upload").onclick = async () => {
   $("uploads").innerHTML = files.map((file) => `<div class="item">Preparing ${escapeHtml(file.name)}…</div>`).join("");
   let success = 0;
   let directFallbacks = 0;
+  let chunkedUploads = 0;
   for (let index = 0; index < files.length; index += 1) {
     const file = files[index];
     try {
+      if (file.size > CHUNK_SIZE) {
+        const result = await uploadChunked(file, index, files.length);
+        success += 1;
+        chunkedUploads += 1;
+        $("uploads").children[index].textContent = `✓ ${result.filename} — ${result.bytes} bytes — persistent (chunked)`;
+        continue;
+      }
       const session = await request(`/api/v1/projects/${projectId}/clips/upload-session?filename=${encodeURIComponent(file.name)}&size=${file.size}`, { method: "POST" });
       $("uploads").children[index].textContent = `Uploading ${file.name} — 0% (${index + 1}/${files.length})`;
       const uploadMode = await uploadWithResumableFallback(file, session, index, files.length);
@@ -129,8 +152,10 @@ $("upload").onclick = async () => {
       $("uploads").children[index].textContent = `✗ ${file.name} — ${error.message}`;
     }
   }
-  const fallbackNote = directFallbacks ? ` ${directFallbacks} file(s) used secure direct fallback.` : "";
-  $("job").textContent = `${success}/${files.length} file(s) uploaded successfully.${fallbackNote}`;
+  const notes = [];
+  if (directFallbacks) notes.push(`${directFallbacks} secure direct fallback`);
+  if (chunkedUploads) notes.push(`${chunkedUploads} chunked`);
+  $("job").textContent = `${success}/${files.length} file(s) uploaded successfully.${notes.length ? ` ${notes.join(", ")}.` : ""}`;
 };
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[char])); }
