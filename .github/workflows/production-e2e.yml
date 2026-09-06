@@ -32,17 +32,22 @@ jobs:
           test -s health.json
       - name: Allow Render rollout to settle
         run: sleep 5
-      - name: Generate >40 MiB MP4 fixture
+      - name: Generate production fixtures
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
           ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=1280x720:rate=30 -f lavfi -i sine=frequency=880:sample_rate=48000 -t 30 -c:v libx264 -preset ultrafast -b:v 12M -pix_fmt yuv420p -c:a aac -b:a 128k -shortest /tmp/production-e2e-source.mp4
-          SIZE=$(stat -c%s /tmp/production-e2e-source.mp4)
-          echo "fixture_bytes=$SIZE"
-          test "$SIZE" -gt $((40 * 1024 * 1024))
-          test "$SIZE" -lt $((50 * 1024 * 1024))
+          LARGE_SIZE=$(stat -c%s /tmp/production-e2e-source.mp4)
+          echo "large_fixture_bytes=$LARGE_SIZE"
+          test "$LARGE_SIZE" -gt $((40 * 1024 * 1024))
+          test "$LARGE_SIZE" -lt $((50 * 1024 * 1024))
           ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 /tmp/production-e2e-source.mp4
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=640x360:rate=30 -f lavfi -i sine=frequency=880:sample_rate=48000 -t 6 -c:v libx264 -preset ultrafast -b:v 2M -pix_fmt yuv420p -c:a aac -b:a 96k -shortest /tmp/production-e2e-small.mp4
+          SMALL_SIZE=$(stat -c%s /tmp/production-e2e-small.mp4)
+          echo "small_fixture_bytes=$SMALL_SIZE"
+          test "$SMALL_SIZE" -gt 1000
+          ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 /tmp/production-e2e-small.mp4
       - name: Production chunked signed upload smoke test
         env: { API: https://supervideoeditorai-api-v2.onrender.com }
         run: |
@@ -75,7 +80,7 @@ jobs:
           set -euo pipefail
           PROJECT_JSON=$(curl -fsS -X POST "$API/api/v1/projects")
           PROJECT=$(python -c 'import json,sys; print(json.load(sys.stdin)["project_id"])' <<< "$PROJECT_JSON")
-          UPLOAD_JSON=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/clips" -F 'file=@/tmp/production-e2e-source.mp4;type=video/mp4')
+          UPLOAD_JSON=$(curl --fail-with-body --max-time 120 -sS -X POST "$API/api/v1/projects/$PROJECT/clips" -F 'file=@/tmp/production-e2e-small.mp4;type=video/mp4')
           python - "$UPLOAD_JSON" <<'PY'
           import json,sys
           data=json.loads(sys.argv[1]); assert data.get('persistent') is True and data.get('bytes',0)>1000,data
