@@ -9,7 +9,7 @@ on:
       duration_minutes:
         description: "How long to keep the public test URL alive"
         required: true
-        default: "30"
+        default: "15"
         type: choice
         options:
           - "15"
@@ -59,30 +59,15 @@ jobs:
 
       - name: Start temporary public preview
         id: tunnel
+        shell: bash
         run: |
-          set -u
+          set -euo pipefail
           (cloudflared tunnel --no-autoupdate --url http://127.0.0.1:3000 > tunnel.log 2>&1 || true) &
           TUNNEL_PID=$!
+          URL=""
           for attempt in $(seq 1 30); do
             URL=$(grep -oE 'https://[-a-z0-9]+\.trycloudflare\.com' tunnel.log | head -n 1 || true)
             if [ -n "$URL" ]; then
-              echo "PUBLIC_PREVIEW_URL=$URL" >> "$GITHUB_ENV"
-              echo "preview_url=$URL" >> "$GITHUB_OUTPUT"
-              printf '%s\n' "$URL" > LIVE_PREVIEW_URL.txt
-              {
-                echo "## SuperVideoEditorAI live preview"
-                echo
-                echo "### Open this URL"
-                echo
-                echo "$URL"
-                echo
-                echo "Temporary anonymous TryCloudflare URL. It is valid only while this workflow run is alive."
-              } > LIVE_PREVIEW.md
-              echo "::notice title=SuperVideoEditorAI LIVE PREVIEW::$URL"
-              echo "## SuperVideoEditorAI real-world preview" >> "$GITHUB_STEP_SUMMARY"
-              echo "**Public URL:** $URL" >> "$GITHUB_STEP_SUMMARY"
-              echo "**Temporary duration:** ${PREVIEW_DURATION_MINUTES:-15} minutes" >> "$GITHUB_STEP_SUMMARY"
-              echo "This is an anonymous TryCloudflare quick tunnel for testing only. It does not create or modify a Cloudflare account tunnel, DNS record, or custom domain." >> "$GITHUB_STEP_SUMMARY"
               break
             fi
             if ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
@@ -91,10 +76,27 @@ jobs:
             fi
             sleep 2
           done
-          if [ -z "${PUBLIC_PREVIEW_URL:-}" ]; then
+          if [ -z "$URL" ]; then
             cat tunnel.log
             exit 1
           fi
+          echo "PUBLIC_PREVIEW_URL=$URL" >> "$GITHUB_ENV"
+          echo "preview_url=$URL" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$URL" > LIVE_PREVIEW_URL.txt
+          {
+            echo "## SuperVideoEditorAI live preview"
+            echo
+            echo "### Open this URL"
+            echo
+            echo "$URL"
+            echo
+            echo "Temporary anonymous TryCloudflare URL. It is valid only while this workflow run is alive."
+          } > LIVE_PREVIEW.md
+          echo "::notice title=SuperVideoEditorAI LIVE PREVIEW::$URL"
+          echo "## SuperVideoEditorAI real-world preview" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Public URL:** $URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Temporary duration:** ${PREVIEW_DURATION_MINUTES:-15} minutes" >> "$GITHUB_STEP_SUMMARY"
+          echo "This is an anonymous TryCloudflare quick tunnel for testing only. It does not create or modify a Cloudflare account tunnel, DNS record, or custom domain." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish live preview URL artifact
         uses: actions/upload-artifact@v4
@@ -119,7 +121,7 @@ jobs:
           def check(path):
               url = base + path
               last = None
-              for attempt in range(15):
+              for attempt in range(20):
                   try:
                       with urllib.request.urlopen(url, timeout=5) as response:
                           body = response.read().decode('utf-8', errors='replace')
@@ -128,16 +130,13 @@ jobs:
                               return body
                   except Exception as exc:
                       last = exc
-                      print(f'Public endpoint not ready ({attempt + 1}/15) {url}: {exc}')
+                      print(f'Public endpoint not ready ({attempt + 1}/20) {url}: {exc}')
                   time.sleep(2)
               raise SystemExit(f'Public endpoint verification failed: {url}; last error: {last}')
 
           check('/')
           health = check('/health')
-          try:
-              payload = json.loads(health)
-          except json.JSONDecodeError as exc:
-              raise SystemExit(f'/health did not return valid JSON: {exc}')
+          payload = json.loads(health)
           if payload.get('status') != 'ok':
               raise SystemExit(f'/health returned unexpected payload: {payload}')
           print('Public preview verification: PASS')
@@ -234,8 +233,8 @@ jobs:
           status, body, headers = request('GET', f'/api/v1/projects/{project}/output', timeout=60)
           assert status == 200, (status, headers)
           assert len(body) > 1000, len(body)
-          print('public rendered MP4 verified:', len(body), 'bytes')
           assert headers.get_content_type() == 'video/mp4', headers.get_content_type()
+          print('public rendered MP4 verified:', len(body), 'bytes')
           print('Public full video workflow: PASS')
           PY
 
