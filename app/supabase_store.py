@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 
@@ -78,23 +78,41 @@ class SupabaseStore:
 
     def create_signed_upload(self, storage_path: str) -> dict:
         encoded_path = quote(storage_path, safe="/")
-        response = self._request("POST", f"/storage/v1/object/upload/sign/{self.bucket}/{encoded_path}", headers={"x-upsert": "true", "Content-Type": "application/json"}, json={})
+        response = self._request(
+            "POST",
+            f"/storage/v1/object/upload/sign/{self.bucket}/{encoded_path}",
+            headers={"x-upsert": "true", "Content-Type": "application/json"},
+            json={},
+        )
         data = response.json()
         relative_url = data.get("url")
         if not relative_url:
             raise RuntimeError("Supabase did not return a signed upload URL")
+
         signed_url = f"{self.url}{relative_url}" if relative_url.startswith("/") else relative_url
-        token = signed_url.split("token=", 1)[1] if "token=" in signed_url else ""
-        if not token:
-            raise RuntimeError("Supabase did not return a signed upload token")
+        parsed_signed = urlparse(signed_url)
+        query = parse_qs(parsed_signed.query, keep_blank_values=True)
+        token = (query.get("token") or [""])[0]
+        # Newer Storage responses may expose the token directly. Prefer that value
+        # because it is already decoded and is exactly what x-signature expects.
+        token = data.get("token") or token
+        if not token or token.count(".") != 2:
+            raise RuntimeError("Supabase returned an invalid signed upload token")
+
         parsed = urlparse(self.url)
         project_host = parsed.hostname or ""
         if project_host.endswith(".supabase.co"):
-            project_ref = project_host[:-len(".supabase.co")]
+            project_ref = project_host[: -len(".supabase.co")]
             resumable_endpoint = f"https://{project_ref}.storage.supabase.co/storage/v1/upload/resumable"
         else:
             resumable_endpoint = f"{self.url}/storage/v1/upload/resumable"
-        return {"path": storage_path, "signed_url": signed_url, "token": token, "resumable_endpoint": resumable_endpoint}
+
+        return {
+            "path": storage_path,
+            "signed_url": signed_url,
+            "token": token,
+            "resumable_endpoint": resumable_endpoint,
+        }
 
     def storage_object_info(self, storage_path: str) -> dict:
         encoded_path = quote(storage_path, safe="/")
@@ -135,5 +153,6 @@ class SupabaseStore:
 
     def get_artifacts(self, project_id: str, artifact_type: str | None = None) -> list[dict]:
         params = {"project_id": f"eq.{self._project_uuid(project_id)}", "order": "created_at.desc"}
-        if artifact_type: params["artifact_type"] = f"eq.{artifact_type}"
+        if artifact_type:
+            params["artifact_type"] = f"eq.{artifact_type}"
         return self._request("GET", "/rest/v1/project_artifacts", params=params).json()
