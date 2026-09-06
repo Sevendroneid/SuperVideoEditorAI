@@ -2,10 +2,18 @@
 
 ## Preconditions
 
-- Docker Desktop or Docker Engine with Compose is installed.
+- Docker Desktop or Docker Engine with Compose is installed for local verification.
 - The repository is cloned locally.
 - At least one short test video exists locally.
 - No paid AI provider is required for the deterministic baseline pipeline.
+
+## Production target
+
+The current production API target is the persistent Render service:
+
+`https://supervideoeditorai-api-v2.onrender.com`
+
+The frontend uses the same API by default. The v4 Render service is retained as a diagnostic/development deployment and is not the release target because its current environment does not expose persistent Supabase storage.
 
 ## Start
 
@@ -30,7 +38,7 @@ Open `http://localhost:3000`.
 ## API checks
 
 - `GET /health` must return HTTP 200 and `status=ok`.
-- `/health` must report `ffmpeg_ready=true` in an environment where the bundled/system FFmpeg is available.
+- `/health` must report both `persistent_storage=true` and `ffmpeg_ready=true` in the production target.
 - `POST /api/v1/projects` creates a project.
 - Upload rejects unsupported extensions with HTTP 415.
 - Upload rejects files above `MAX_UPLOAD_BYTES` with HTTP 413.
@@ -43,7 +51,7 @@ Open `http://localhost:3000`.
 A real-world release is not considered verified until all of these are observed:
 
 - API health succeeds.
-- A real video upload succeeds.
+- A real video upload succeeds and is persistent.
 - Analysis creates `analysis.json` containing clip and segment evidence.
 - The timeline contains valid segment boundaries.
 - The analysis job reaches `completed`.
@@ -52,6 +60,6 @@ A real-world release is not considered verified until all of these are observed:
 - CI reports passing automated tests.
 - The public-preview workflow passes the complete upload → analysis → director → render → MP4 verification when run with `[preview-ci]` or manually from GitHub Actions.
 
-The current Render v4 service intentionally executes the heavy analysis/render task through the FastAPI background-task path rather than requiring a second always-on worker service. The Celery task definitions remain available for the Docker/worker deployment profile.
+The production Render service currently executes the heavy analysis/render task through the FastAPI background-task path. Celery task definitions remain available for the Docker/worker deployment profile.
 
 The baseline is intentionally deterministic. Cinematic AI, generative video/image adapters, speech-to-text, embeddings, and advanced story reasoning must be added only after this pipeline is proven with real footage.
