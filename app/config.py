@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     api_prefix: str = "/api/v1"
-    cors_origins: str = "*"
+    cors_origins: str = "http://localhost:3000,http://localhost:5173"
     max_upload_bytes: int = 524_288_000
     storage_root: Path = Path("./storage")
     redis_url: str = "redis://localhost:6379/0"
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     @classmethod
     def empty_cors_origins_uses_default(cls, value):
         if not os.getenv("CORS_ORIGINS", "").strip() or (isinstance(value, str) and not value.strip()):
-            return "*"
+            return "http://localhost:3000,http://localhost:5173"
         return value
 
     @field_validator("max_upload_bytes", mode="before")
