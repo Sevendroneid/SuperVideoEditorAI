@@ -55,8 +55,8 @@ class FFmpeg:
                 raise FFmpegError("ffprobe returned invalid JSON") from exc
 
         # Render's native Python runtime does not guarantee a system ffprobe.
-        # imageio-ffmpeg bundles a portable ffmpeg binary, so derive the small
-        # metadata subset used by the analyzer directly from `ffmpeg -i`.
+        # imageio-ffmpeg bundles a portable ffmpeg binary, so derive the metadata
+        # subset used by the analyzer directly from `ffmpeg -i`.
         result = subprocess.run(
             [self.ffmpeg_bin, "-hide_banner", "-i", str(path)],
             capture_output=True, text=True, timeout=60, check=False,
@@ -71,23 +71,26 @@ class FFmpeg:
             hours, minutes, seconds = duration_match.groups()
             duration = int(hours) * 3600 + int(minutes) * 60 + float(seconds)
 
-        video_match = re.search(
-            r"Stream #\S+(?:\([^)]*\))?:\s*Video:\s*([^,\n]+).*?(\d{2,5})x(\d{2,5})(?:[,\s].*?)?(?:,\s*([0-9]+(?:\.[0-9]+)?)\s*fps)?",
-            diagnostic,
-            re.IGNORECASE | re.DOTALL,
-        )
-        if not video_match:
+        video_lines = [line.strip() for line in diagnostic.splitlines() if re.search(r"Video:", line, re.IGNORECASE)]
+        if not video_lines:
             raise FFmpegError(f"No video stream found in {path.name}")
+        video_line = video_lines[0]
+        resolution = re.search(r"(\d{2,5})x(\d{2,5})", video_line)
+        if not resolution:
+            raise FFmpegError(f"Video stream has no usable resolution in {path.name}")
+        width, height = (int(resolution.group(1)), int(resolution.group(2)))
+        fps_match = re.search(r"(?:,|\s)(\d+(?:\.\d+)?)\s+fps(?:,|\s|$)", video_line, re.IGNORECASE)
+        fps_value = float(fps_match.group(1)) if fps_match else 0.0
+        codec_match = re.search(r"Video:\s*([^,\s]+)", video_line, re.IGNORECASE)
+        codec_name = codec_match.group(1) if codec_match else "unknown"
 
-        codec, width, height, fps = video_match.groups()
-        fps_value = float(fps) if fps else 0.0
         return {
             "format": {"duration": str(duration)},
             "streams": [{
                 "codec_type": "video",
-                "codec_name": codec.strip().split()[0],
-                "width": int(width),
-                "height": int(height),
+                "codec_name": codec_name,
+                "width": width,
+                "height": height,
                 "avg_frame_rate": f"{fps_value}/1" if fps_value else "0/1",
                 "duration": str(duration),
                 "nb_frames": "0",
