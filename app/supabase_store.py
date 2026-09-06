@@ -135,7 +135,7 @@ class SupabaseStore:
 
     def download_file(self, storage_path: str, destination: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if storage_path.endswith(".parts.json"):
+        if storage_path.endswith(".parts.mp4"):
             manifest_temp = destination.parent / f".{destination.name}.manifest"
             self._download_single(manifest_temp, storage_path)
             try:
