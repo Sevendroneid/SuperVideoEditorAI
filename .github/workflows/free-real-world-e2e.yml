@@ -3,6 +3,8 @@ name: free-real-world-e2e
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 # Zero-cost end-to-end verification against the live Render service.
@@ -12,26 +14,19 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-
       - name: Generate real MP4 fixture
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
-          ffmpeg -hide_banner -loglevel error -y \
-            -f lavfi -i testsrc2=size=640x360:rate=24 \
-            -f lavfi -i sine=frequency=880:sample_rate=48000 \
-            -t 6 -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
-            -c:a aac -b:a 96k -shortest /tmp/e2e-source.mp4
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=640x360:rate=24 -f lavfi -i sine=frequency=880:sample_rate=48000 -t 6 -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac -b:a 96k -shortest /tmp/e2e-source.mp4
           test -s /tmp/e2e-source.mp4
           ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 /tmp/e2e-source.mp4
-
       - name: Wait for free Render service
         env:
           API: https://supervideoeditorai-free.onrender.com
         run: |
           set -euo pipefail
-          rm -f health.json
           for attempt in $(seq 1 120); do
             if curl -fsS "$API/health" -o health.json; then
               cat health.json
@@ -45,9 +40,7 @@ jobs:
             fi
             sleep 5
           done
-          echo 'FREE SERVICE HEALTH CHECK FAILED'
           exit 1
-
       - name: Real-world API E2E
         env:
           API: https://supervideoeditorai-free.onrender.com
@@ -55,63 +48,39 @@ jobs:
           set -euo pipefail
           PROJECT_JSON=$(curl -fsS -X POST "$API/api/v1/projects")
           PROJECT=$(python -c 'import json,sys; print(json.load(sys.stdin)["project_id"])' <<< "$PROJECT_JSON")
-          echo "project=$PROJECT"
-
           UPLOAD_JSON=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/clips" -F 'file=@/tmp/e2e-source.mp4;type=video/mp4')
-          echo "$UPLOAD_JSON"
           python - "$UPLOAD_JSON" <<'PY'
           import json,sys
-          data=json.loads(sys.argv[1])
-          assert data.get('persistent') is False, data
-          assert data.get('bytes',0)>1000, data
+          d=json.loads(sys.argv[1]); assert d.get('persistent') is False and d.get('bytes',0)>1000,d
           PY
-
           ANALYZE_JSON=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/analyze")
-          echo "$ANALYZE_JSON"
           JOB=$(python -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$ANALYZE_JSON")
           for attempt in $(seq 1 180); do
-            JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$JOB")
-            STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON")
-            echo "$STATUS"
-            if [ "$STATUS" = completed ]; then break; fi
-            if [ "$STATUS" = failed ]; then cat <<< "$JOB_JSON"; exit 1; fi
+            J=$(curl -fsS "$API/api/v1/jobs/$JOB"); S=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$J"); echo "$S"
+            [ "$S" = completed ] && break
+            [ "$S" = failed ] && { cat <<< "$J"; exit 1; }
             sleep 2
           done
-          test "${STATUS:-}" = completed
-
+          test "${S:-}" = completed
           ANALYSIS=$(curl -fsS "$API/api/v1/projects/$PROJECT/analysis")
           python - "$ANALYSIS" <<'PY'
           import json,sys
-          data=json.loads(sys.argv[1])
-          assert data.get('clips'), data
-          assert data.get('segments'), data
-          assert data.get('timeline',{}).get('items'), data
+          d=json.loads(sys.argv[1]); assert d.get('clips') and d.get('segments') and d.get('timeline',{}).get('items'),d
           PY
-
-          DIRECTOR=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/director" \
-            -H 'Content-Type: application/json' \
-            -d '{"instruction":"make the opening stronger"}')
-          echo "$DIRECTOR"
+          DIRECTOR=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/director" -H 'Content-Type: application/json' -d '{"instruction":"make the opening stronger"}')
           python - "$DIRECTOR" <<'PY'
           import json,sys
-          data=json.loads(sys.argv[1])
-          assert data.get('applied') is True, data
-          assert data.get('evidence_bound') is True, data
+          d=json.loads(sys.argv[1]); assert d.get('applied') is True and d.get('evidence_bound') is True,d
           PY
-
           RENDER=$(curl -fsS -X POST "$API/api/v1/projects/$PROJECT/render")
-          echo "$RENDER"
           RENDER_JOB=$(python -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<< "$RENDER")
           for attempt in $(seq 1 180); do
-            JOB_JSON=$(curl -fsS "$API/api/v1/jobs/$RENDER_JOB")
-            STATUS=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$JOB_JSON")
-            echo "$STATUS"
-            if [ "$STATUS" = completed ]; then break; fi
-            if [ "$STATUS" = failed ]; then cat <<< "$JOB_JSON"; exit 1; fi
+            J=$(curl -fsS "$API/api/v1/jobs/$RENDER_JOB"); S=$(python -c 'import json,sys; print(json.load(sys.stdin).get("status"))' <<< "$J"); echo "$S"
+            [ "$S" = completed ] && break
+            [ "$S" = failed ] && { cat <<< "$J"; exit 1; }
             sleep 2
           done
-          test "${STATUS:-}" = completed
-
+          test "${S:-}" = completed
           curl -fsS "$API/api/v1/projects/$PROJECT/output" -o /tmp/e2e-output.mp4
           test -s /tmp/e2e-output.mp4
           test "$(stat -c%s /tmp/e2e-output.mp4)" -gt 1000
