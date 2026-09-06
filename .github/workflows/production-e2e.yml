@@ -8,7 +8,7 @@ on:
 jobs:
   render-production-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -50,6 +50,97 @@ jobs:
             /tmp/production-e2e-source.mp4
           test -s /tmp/production-e2e-source.mp4
           ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 /tmp/production-e2e-source.mp4
+
+      - name: Production signed TUS upload smoke test
+        env:
+          API: https://supervideoeditorai-api-v2.onrender.com
+        run: |
+          set -euo pipefail
+          python - "$API" /tmp/production-e2e-source.mp4 <<'PY'
+          import base64
+          import json
+          import sys
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          api = sys.argv[1].rstrip('/')
+          fixture = Path(sys.argv[2])
+          data = fixture.read_bytes()
+          filename = 'production-tus-smoke.mp4'
+
+          def request(method, url, body=None, headers=None):
+              req = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=120) as response:
+                      return response.status, response.read(), dict(response.headers)
+              except urllib.error.HTTPError as exc:
+                  detail = exc.read().decode('utf-8', errors='replace')
+                  raise SystemExit(f'{method} {url} -> HTTP {exc.code}: {detail}')
+
+          status, body, _ = request('POST', f'{api}/api/v1/projects')
+          assert status == 200, (status, body)
+          project = json.loads(body)['project_id']
+
+          query = urllib.parse.urlencode({'filename': filename, 'size': len(data)})
+          status, body, _ = request('POST', f'{api}/api/v1/projects/{project}/clips/upload-session?{query}')
+          assert status == 200, (status, body)
+          session = json.loads(body)
+          token = session.get('token')
+          endpoint = session.get('resumable_endpoint')
+          storage_path = session.get('path')
+          assert token and token.count('.') == 2, session
+          assert endpoint and endpoint.endswith('/storage/v1/upload/resumable'), session
+          assert storage_path.startswith(project + '/'), session
+
+          def b64(value):
+              return base64.b64encode(value.encode()).decode()
+
+          metadata = ','.join([
+              f'bucketName {b64("supervideo")}',
+              f'objectName {b64(storage_path)}',
+              f'contentType {b64("video/mp4")}',
+              f'cacheControl {b64("3600")}',
+          ])
+          headers = {
+              'Tus-Resumable': '1.0.0',
+              'Upload-Length': str(len(data)),
+              'Content-Type': 'application/offset+octet-stream',
+              'x-signature': token,
+              'x-upsert': 'true',
+              'Upload-Metadata': metadata,
+          }
+          status, body, response_headers = request('POST', endpoint, data, headers)
+          assert status == 201, (status, body, response_headers)
+          location = response_headers.get('Location')
+          assert location, response_headers
+          if location.startswith('/'):
+              parsed = urllib.parse.urlparse(endpoint)
+              location = f'{parsed.scheme}://{parsed.netloc}{location}'
+
+          print('SIGNED TUS POST: PASS')
+          print('location_host=', urllib.parse.urlparse(location).netloc)
+          print('uploaded_bytes=', len(data))
+
+          complete_payload = json.dumps({
+              'filename': filename,
+              'storage_path': storage_path,
+              'bytes': len(data),
+          }).encode()
+          status, body, _ = request(
+              'POST',
+              f'{api}/api/v1/projects/{project}/clips/complete',
+              complete_payload,
+              {'Content-Type': 'application/json'},
+          )
+          assert status == 200, (status, body)
+          complete = json.loads(body)
+          assert complete.get('persistent') is True, complete
+          assert complete.get('bytes') == len(data), complete
+          print('SIGNED TUS COMPLETE: PASS')
+          print('project=', project)
+          print('storage_path=', storage_path)
+          PY
 
       - name: Full production API E2E
         env:
