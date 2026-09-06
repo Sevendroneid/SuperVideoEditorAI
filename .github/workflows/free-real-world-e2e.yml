@@ -5,6 +5,7 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Zero-cost end-to-end verification against the live Render service.
 jobs:
   e2e:
     runs-on: ubuntu-latest
