@@ -31,6 +31,18 @@ jobs:
             sleep 5
           done
           test -s health.json
+          echo "Waiting for a stable production instance before starting the destructive upload test..."
+          for check in $(seq 1 6); do
+            curl -fsS "$API/health" -o health-stable.json
+            python - <<'PY'
+          import json
+          data=json.load(open('health-stable.json'))
+          assert data.get('status') == 'ok', data
+          assert data.get('persistent_storage') is True, data
+          assert data.get('ffmpeg_ready') is True, data
+          PY
+            sleep 5
+          done
       - name: Generate >40 MiB valid MP4 fixture
         run: |
           set -euo pipefail
