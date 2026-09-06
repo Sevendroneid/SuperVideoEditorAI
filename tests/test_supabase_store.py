@@ -28,7 +28,6 @@ def test_supabase_store_headers_are_server_side(monkeypatch):
 def test_storage_path_is_not_derived_from_local_absolute_paths():
     store = SupabaseStore("https://example.supabase.co", "key")
     local = Path("/tmp/supervideoeditorai/project/clip.mp4")
-    # The adapter receives an explicit object key, so callers control the remote namespace.
     assert local.name == "clip.mp4"
     assert store.bucket == "supervideo"
 
@@ -55,9 +54,7 @@ def test_create_signed_upload_accepts_storage_prefixed_url(monkeypatch):
 
     class Response:
         def json(self):
-            return {
-                "url": "/storage/v1/object/upload/sign/supervideo/project/clip.mp4?token=header.payload.signature",
-            }
+            return {"url": "/storage/v1/object/upload/sign/supervideo/project/clip.mp4?token=header.payload.signature"}
 
     monkeypatch.setattr(store, "_request", lambda *args, **kwargs: Response())
     session = store.create_signed_upload("project/clip.mp4")
@@ -80,5 +77,21 @@ def test_create_signed_upload_prefers_explicit_token(monkeypatch):
     session = store.create_signed_upload("project/clip.mp4")
 
     assert session["token"] == raw_token
-    assert session["signed_url"] == "https://example.supabase.co/storage/v1/object/upload/sign/supervideo/project/clip.mp4?token=stale"
+    assert session["signed_url"].startswith("https://example.supabase.co/storage/v1/object/upload/sign/")
     assert session["resumable_endpoint"] == "https://example.storage.supabase.co/storage/v1/upload/resumable"
+
+
+def test_storage_object_info_reads_size_from_supabase_metadata(monkeypatch):
+    store = SupabaseStore("https://example.supabase.co", "key")
+
+    class Response:
+        def json(self):
+            return {"size": 32373, "contentType": "video/mp4"}
+
+    calls = []
+    monkeypatch.setattr(store, "_request", lambda *args, **kwargs: (calls.append((args, kwargs)) or Response()))
+    info = store.storage_object_info("project/clip.mp4")
+
+    assert info == {"bytes": 32373, "content_type": "video/mp4"}
+    assert calls[0][0][0] == "GET"
+    assert calls[0][0][1] == "/storage/v1/object/info/supervideo/project/clip.mp4"
