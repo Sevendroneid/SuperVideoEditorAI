@@ -27,14 +27,6 @@ function setProject(id) {
   [$("upload"), $("analyze"), $("direct")].forEach((el) => el.disabled = false);
 }
 
-$("create").onclick = async () => {
-  try {
-    const data = await request("/api/v1/projects", { method: "POST" });
-    setProject(data.project_id);
-    $("job").textContent = persistentStorage ? "Project ready. Persistent storage is enabled." : "Project ready. WARNING: persistent storage is not enabled.";
-  } catch (e) { $("job").textContent = e.message; }
-};
-
 function resumableUpload(file, session, index, totalFiles) {
   return new Promise((resolve, reject) => {
     if (!window.tus) return reject(new Error("Resumable upload engine failed to load. Refresh and try again."));
@@ -65,29 +57,80 @@ function resumableUpload(file, session, index, totalFiles) {
   });
 }
 
+function signedDirectUpload(file, session, index, totalFiles) {
+  return new Promise((resolve, reject) => {
+    if (!session.signed_url || !session.signed_url.includes("token=")) {
+      reject(new Error("Server did not return a valid signed upload URL."));
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", session.signed_url, true);
+    xhr.setRequestHeader("Content-Type", file.type || "video/mp4");
+    xhr.setRequestHeader("x-upsert", "true");
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      const percent = Math.floor((event.loaded / event.total) * 100);
+      $("uploads").children[index].textContent = `Uploading ${file.name} — ${percent}% (${index + 1}/${totalFiles})`;
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error(`Signed upload failed: HTTP ${xhr.status}${xhr.responseText ? ` — ${xhr.responseText.slice(0, 240)}` : ""}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error while uploading directly to storage."));
+    xhr.onabort = () => reject(new Error("Upload was cancelled."));
+    xhr.send(file);
+  });
+}
+
+async function uploadWithResumableFallback(file, session, index, totalFiles) {
+  try {
+    await resumableUpload(file, session, index, totalFiles);
+    return "resumable";
+  } catch (tusError) {
+    $("uploads").children[index].textContent = `Resumable upload unavailable; switching to secure direct upload — ${file.name}`;
+    await signedDirectUpload(file, session, index, totalFiles);
+    return "signed-direct";
+  }
+}
+
+$("create").onclick = async () => {
+  try {
+    const data = await request("/api/v1/projects", { method: "POST" });
+    setProject(data.project_id);
+    $("job").textContent = persistentStorage ? "Project ready. Persistent storage is enabled." : "Project ready. WARNING: persistent storage is not enabled.";
+  } catch (e) { $("job").textContent = e.message; }
+};
+
 $("upload").onclick = async () => {
   if (!projectId) return;
   const files = [...$("files").files];
   if (!files.length) { $("uploads").textContent = "Select at least one video."; return; }
   $("uploads").innerHTML = files.map((file) => `<div class="item">Preparing ${escapeHtml(file.name)}…</div>`).join("");
   let success = 0;
+  let directFallbacks = 0;
   for (let index = 0; index < files.length; index += 1) {
     const file = files[index];
     try {
       const session = await request(`/api/v1/projects/${projectId}/clips/upload-session?filename=${encodeURIComponent(file.name)}&size=${file.size}`, { method: "POST" });
       $("uploads").children[index].textContent = `Uploading ${file.name} — 0% (${index + 1}/${files.length})`;
-      await resumableUpload(file, session, index, files.length);
+      const uploadMode = await uploadWithResumableFallback(file, session, index, files.length);
       const result = await request(`/api/v1/projects/${projectId}/clips/complete`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: file.name, storage_path: session.path, bytes: file.size }),
       });
       success += 1;
-      $("uploads").children[index].textContent = `✓ ${result.filename} — ${result.bytes} bytes — persistent`;
+      if (uploadMode === "signed-direct") directFallbacks += 1;
+      const modeLabel = uploadMode === "resumable" ? "resumable" : "secure direct";
+      $("uploads").children[index].textContent = `✓ ${result.filename} — ${result.bytes} bytes — persistent (${modeLabel})`;
     } catch (error) {
       $("uploads").children[index].textContent = `✗ ${file.name} — ${error.message}`;
     }
   }
-  $("job").textContent = `${success}/${files.length} file(s) uploaded successfully with resumable storage.`;
+  const fallbackNote = directFallbacks ? ` ${directFallbacks} file(s) used secure direct fallback.` : "";
+  $("job").textContent = `${success}/${files.length} file(s) uploaded successfully.${fallbackNote}`;
 };
 
 function escapeHtml(value) { return String(value).replace(/[&<>'"]/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;","\"":"&quot;"}[char])); }
