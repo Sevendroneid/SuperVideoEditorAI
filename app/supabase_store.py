@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
+
+logger = logging.getLogger("supervideoeditorai.storage")
 
 
 class SupabaseStore:
@@ -54,6 +57,13 @@ class SupabaseStore:
     def create_clip(self, project_id: str, filename: str, storage_path: str, size: int) -> str:
         clip_id = str(uuid.uuid4())
         self._request("POST", "/rest/v1/clips", json={"id": clip_id, "project_id": self._project_uuid(project_id), "original_filename": filename, "storage_path": storage_path, "bytes": size})
+        if storage_path.endswith(".parts.mp4"):
+            try:
+                self._cleanup_chunk_manifest(storage_path)
+            except Exception as exc:
+                # The clip row is already durable. Do not turn a successful upload
+                # into a failed request because a best-effort storage cleanup timed out.
+                logger.warning("Chunk cleanup deferred for %s: %s", storage_path, exc)
         return clip_id
 
     def get_project_clips(self, project_id: str) -> list[dict]:
@@ -146,6 +156,18 @@ class SupabaseStore:
             headers={"Content-Type": "application/json"},
             timeout=120.0,
         )
+
+    def _cleanup_chunk_manifest(self, storage_path: str) -> None:
+        """Remove chunk objects only after the manifest-backed clip row exists."""
+        response = self._request("GET", f"/storage/v1/object/{self.bucket}/{storage_path}", timeout=120.0)
+        manifest = response.json()
+        parts = manifest.get("parts") or []
+        if not parts:
+            raise RuntimeError("Chunk manifest contains no parts")
+        project_prefix = storage_path.split("/", 1)[0] + "/chunks/"
+        if any(not isinstance(part, str) or not part.startswith(project_prefix) or not part.endswith(".part") for part in parts):
+            raise RuntimeError("Chunk manifest contains an invalid part path")
+        self.remove_objects(parts)
 
     def download_file(self, storage_path: str, destination: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
