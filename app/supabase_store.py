@@ -133,6 +133,20 @@ class SupabaseStore:
         headers = {"Content-Type": content_type, "x-upsert": "true" if upsert else "false"}
         self._request("POST", f"/storage/v1/object/{self.bucket}/{storage_path}", content=payload, headers=headers, timeout=300.0)
 
+    def remove_objects(self, storage_paths: list[str]) -> None:
+        """Delete Storage objects through Supabase Storage, never by SQL metadata deletion."""
+        if not storage_paths:
+            return
+        if len(storage_paths) > 1000:
+            raise ValueError("Supabase Storage supports at most 1000 objects per delete request")
+        self._request(
+            "DELETE",
+            f"/storage/v1/object/{self.bucket}",
+            json={"prefixes": storage_paths},
+            headers={"Content-Type": "application/json"},
+            timeout=120.0,
+        )
+
     def download_file(self, storage_path: str, destination: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if storage_path.endswith(".parts.mp4"):
