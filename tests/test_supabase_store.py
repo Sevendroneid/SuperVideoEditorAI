@@ -95,3 +95,50 @@ def test_storage_object_info_reads_size_from_supabase_metadata(monkeypatch):
     assert info == {"bytes": 32373, "content_type": "video/mp4"}
     assert calls[0][0][0] == "GET"
     assert calls[0][0][1] == "/storage/v1/object/info/supervideo/project/clip.mp4"
+
+
+def test_remove_objects_uses_storage_api_and_enforces_limit(monkeypatch):
+    store = SupabaseStore("https://example.supabase.co", "key")
+    calls = []
+
+    class Response:
+        def json(self):
+            return []
+
+    monkeypatch.setattr(store, "_request", lambda *args, **kwargs: (calls.append((args, kwargs)) or Response()))
+    store.remove_objects(["project/chunks/a.part", "project/chunks/b.part"])
+
+    assert calls[0][0][0] == "DELETE"
+    assert calls[0][0][1] == "/storage/v1/object/supervideo"
+    assert calls[0][1]["json"] == {"prefixes": ["project/chunks/a.part", "project/chunks/b.part"]}
+    with pytest.raises(ValueError, match="at most 1000"):
+        store.remove_objects([f"project/chunks/{i}.part" for i in range(1001)])
+
+
+def test_chunk_manifest_cleanup_validates_paths_and_removes_parts(monkeypatch):
+    store = SupabaseStore("https://example.supabase.co", "key")
+    removed = []
+
+    class Response:
+        def json(self):
+            return {
+                "version": 1,
+                "bytes": 123,
+                "parts": [
+                    "project/chunks/a.part",
+                    "project/chunks/b.part",
+                ],
+            }
+
+    monkeypatch.setattr(store, "_request", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(store, "remove_objects", lambda paths: removed.append(paths))
+    store._cleanup_chunk_manifest("project/clip.parts.mp4")
+    assert removed == [["project/chunks/a.part", "project/chunks/b.part"]]
+
+    class InvalidResponse:
+        def json(self):
+            return {"parts": ["other-project/chunks/a.part"]}
+
+    monkeypatch.setattr(store, "_request", lambda *args, **kwargs: InvalidResponse())
+    with pytest.raises(RuntimeError, match="invalid part path"):
+        store._cleanup_chunk_manifest("project/clip.parts.mp4")
